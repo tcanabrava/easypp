@@ -113,6 +113,9 @@ void Simulation::loop()
         if (seen_edits != edits_) {
             continue; // edited meanwhile: start again from the edited board
         }
+        if (!running_ && pending_steps_ == 0) {
+            continue; // paused meanwhile: a pause takes effect immediately
+        }
         std::swap(work_, next_);
         current_ = work_;
         ++generation_;
