@@ -1,0 +1,10 @@
+[package]
+name = "easypp"
+version = "0.1.0"
+edition = "2024"
+description = "A zero-configuration build tool for small C and C++ projects"
+
+[dependencies]
+
+[profile.release]
+strip = true
