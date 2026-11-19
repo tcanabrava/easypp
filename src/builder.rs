@@ -427,17 +427,12 @@ fn driver(lang: Lang) -> &'static str {
     }
 }
 
-/// `-I` flags every compilation gets: `src/libs` and each library folder, so
-/// `#include "mylib/header.hpp"` and `#include "header.hpp"` both work.
-fn base_includes(project: &Project) -> Vec<String> {
-    let mut out = vec![format!("-I{}", crate::project::LIBS_DIR)];
-    out.extend(
-        project
-            .libs
-            .values()
-            .map(|l| format!("-I{}", l.dir.display())),
-    );
-    out
+/// The `-I` flag every compilation gets: only `src/libs`, so a library's
+/// header is always included as `"mylib/header.hpp"`. (A library's own
+/// headers can also be included as `"header.hpp"`: quoted includes are looked
+/// up next to the including file first.)
+fn base_includes(_project: &Project) -> Vec<String> {
+    vec![format!("-I{}", crate::project::LIBS_DIR)]
 }
 
 fn compile_command(

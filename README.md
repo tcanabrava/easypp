@@ -34,8 +34,11 @@ easypp clean
   `"static_lib1/lib1_header.hpp"`, it links `static_lib1`, plus whatever
   `static_lib1` includes from other libraries, in the right static-link order.
   Circular dependencies between libraries are reported as errors.
-- **Include paths**: `src/libs` and each library folder are on the include path,
-  so both `"static_lib1/lib1_header.hpp"` and `"lib1_header.hpp"` work. Each
+- **Include paths**: only `src/libs` is on the include path, so a library's
+  header is always written with its folder: `#include "static_lib1/lib1_header.hpp"`.
+  Inside a library, its own headers can be included as `"lib1_header.hpp"`
+  (quoted includes are found next to the including file). Writing a bare
+  `"lib1_header.hpp"` elsewhere gets a warning naming the right form. Each
   `src/thirdparty/<x>/` folder (or its `include/` sub-folder) goes on with
   `-isystem`, so warnings from third-party code don't break the build. The
   system's default include and library folders are used as usual.

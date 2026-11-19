@@ -422,14 +422,13 @@ impl Resolver {
     }
 
     /// Finds the header the same way the compiler will: next to the including
-    /// file, then under src/libs, then inside each library folder, then in
+    /// file, then under src/libs (so `"mylib/header.hpp"`), then in
     /// src/thirdparty. Anything else is left to the system.
     fn resolve(&self, from: &Path, include: &str) -> Option<PathBuf> {
         let here = from.parent().map(|p| p.join(include));
         let candidates = here
             .into_iter()
             .chain(std::iter::once(self.libs_root.join(include)))
-            .chain(self.libs.iter().map(|(_, dir, _)| dir.join(include)))
             .chain(self.thirdparty.iter().map(|dir| dir.join(include)));
         for candidate in candidates {
             if candidate.is_file() {
@@ -437,6 +436,25 @@ impl Resolver {
             }
         }
         None
+    }
+
+    /// The library that has `include` as a file, when it was written without
+    /// the library's folder.
+    fn library_with_file(&self, include: &str) -> Option<&str> {
+        self.libs
+            .iter()
+            .find(|(_, dir, _)| dir.join(include).is_file())
+            .map(|(name, _, _)| name.as_str())
+    }
+
+    /// A path relative to the project root, for messages.
+    fn display(&self, canonical: &Path) -> String {
+        let root = std::env::current_dir().unwrap_or_default();
+        canonical
+            .strip_prefix(&root)
+            .unwrap_or(canonical)
+            .display()
+            .to_string()
     }
 
     fn owner(&self, canonical: &Path) -> Option<&str> {
@@ -475,6 +493,13 @@ impl Resolver {
                     continue;
                 }
                 let Some(header) = self.resolve(&file, include) else {
+                    if let Some(lib) = self.library_with_file(include) {
+                        ui::warn(&format!(
+                            "{} includes \"{include}\", which is in library '{lib}': \
+                             write #include \"{lib}/{include}\"",
+                            self.display(&file)
+                        ));
+                    }
                     external.insert(include.to_string());
                     continue;
                 };
