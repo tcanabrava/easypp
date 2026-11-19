@@ -1,0 +1,5 @@
+Tasks is a small Qt Widgets example built with easypp.
+
+There is no build file: easypp ran moc on the Q_OBJECT classes, uic on
+mainwindow.ui and rcc on resources.qrc, and linked Qt6Core, Qt6Gui and
+Qt6Widgets because the sources include their headers.
