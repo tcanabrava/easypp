@@ -5,6 +5,7 @@ mod qt;
 mod scaffold;
 mod system;
 mod ui;
+mod watch;
 
 use builder::Options;
 use project::{Project, Target};
@@ -24,6 +25,8 @@ Commands:
   run [name] [-- args]  Build and run an executable from src/bin
   test [filter]         Build and run the programs in src/tests
   info                  Show what was discovered and what links to what
+  watch                 Keep compile_commands.json (and Qt's generated files)
+                        up to date as src/ changes (also: --watch)
   clean                 Remove the build/ folder
 
 Options:
@@ -69,6 +72,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
                 break;
             }
             "-r" | "--release" => opts.release = true,
+            "--watch" if command.is_none() => command = Some("watch".to_string()),
             "-v" | "--verbose" => opts.verbose = true,
             "--no-cache" => opts.cache = false,
             "-h" | "--help" => command = Some("help".to_string()),
@@ -129,7 +133,7 @@ fn run() -> Result<ExitCode, String> {
             ui::status("Created", "project layout in the current folder");
             return Ok(ExitCode::SUCCESS);
         }
-        "build" | "run" | "test" | "info" | "clean" => {}
+        "build" | "run" | "test" | "info" | "clean" | "watch" => {}
         other => return Err(format!("unknown command '{other}' (see `easypp --help`)")),
     }
 
@@ -147,30 +151,11 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let mut cache = if cli.opts.cache {
-        match cache::Cache::open(Path::new(builder::BUILD_DIR)) {
-            Ok(cache) => Some(cache),
-            Err(e) => {
-                ui::warn(&format!(
-                    "build cache unavailable ({e}); continuing without it"
-                ));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let project = project::discover(&root, cache.as_mut())?;
-    if cli.opts.verbose {
-        match &cache {
-            Some(c) if c.redetected() => {
-                eprintln!("cache: detected the system, saved to build/easypp.db")
-            }
-            Some(_) => eprintln!("cache: system and include lists from build/easypp.db"),
-            None => eprintln!("cache: not used"),
-        }
+    if cli.command == "watch" {
+        watch::run(&root, &cli.opts);
     }
-    drop(cache);
+
+    let project = load_project(&root, &cli.opts)?;
     match cli.command.as_str() {
         "build" => {
             let targets: Vec<&Target> = project.bins.iter().collect();
@@ -185,6 +170,35 @@ fn run() -> Result<ExitCode, String> {
         }
         _ => unreachable!(),
     }
+}
+
+/// Discovers the project at `root` (the current directory), using the cache
+/// unless disabled. The cache is released before returning.
+pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Project, String> {
+    let mut cache = if opts.cache {
+        match cache::Cache::open(Path::new(builder::BUILD_DIR)) {
+            Ok(cache) => Some(cache),
+            Err(e) => {
+                ui::warn(&format!(
+                    "build cache unavailable ({e}); continuing without it"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let project = project::discover(root, cache.as_mut())?;
+    if opts.verbose {
+        match &cache {
+            Some(c) if c.redetected() => {
+                eprintln!("cache: detected the system, saved to build/easypp.db")
+            }
+            Some(_) => eprintln!("cache: system and include lists from build/easypp.db"),
+            None => eprintln!("cache: not used"),
+        }
+    }
+    Ok(project)
 }
 
 fn run_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {

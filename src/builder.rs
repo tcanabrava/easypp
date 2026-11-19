@@ -20,6 +20,9 @@ use std::time::{Instant, SystemTime};
 
 pub const BUILD_DIR: &str = "build";
 
+/// Written at the project root, where every LSP looks for it.
+pub const COMPILE_DB: &str = "compile_commands.json";
+
 const WARNINGS: [&str; 3] = ["-Wall", "-pedantic", "-Werror"];
 const C_STD: &str = "-std=c17";
 const CPP_STD: &str = "-std=c++20";
@@ -158,31 +161,13 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         .collect();
     write_compile_commands(project, opts, &libs)?;
 
-    // 1. Qt code generation: uic first (sources and moc may include its
-    //    headers), then moc and rcc.
+    // 1. Qt code generation.
     let plans: Vec<&qt::Plan> = libs
         .values()
         .chain(programs.iter().map(|(_, c)| c))
         .map(|c| &c.plan)
         .collect();
-    let codegen = |steps: Vec<&qt::Step>| -> Vec<Job> {
-        steps
-            .into_iter()
-            .filter(|s| !up_to_date(&s.output, &s.cmd, &s.inputs))
-            .map(|s| Job {
-                verb: "Generating",
-                label: format!("{} {}", s.tool, s.input.display()),
-                output: s.output.clone(),
-                cmd: s.cmd.clone(),
-                compiler: false,
-            })
-            .collect()
-    };
-    run_jobs(codegen(plans.iter().flat_map(|p| &p.ui).collect()), opts)?;
-    run_jobs(
-        codegen(plans.iter().flat_map(|p| &p.generate).collect()),
-        opts,
-    )?;
+    run_codegen(&plans, opts)?;
 
     // 2. Compile (in parallel) everything that is out of date.
     let units = libs
@@ -284,6 +269,44 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         ),
     );
     Ok(())
+}
+
+/// Runs moc, uic and rcc where their outputs are stale: uic first (sources and
+/// moc may include its headers), then moc and rcc.
+fn run_codegen(plans: &[&qt::Plan], opts: &Options) -> Result<(), String> {
+    let jobs = |steps: Vec<&qt::Step>| -> Vec<Job> {
+        steps
+            .into_iter()
+            .filter(|s| !up_to_date(&s.output, &s.cmd, &s.inputs))
+            .map(|s| Job {
+                verb: "Generating",
+                label: format!("{} {}", s.tool, s.input.display()),
+                output: s.output.clone(),
+                cmd: s.cmd.clone(),
+                compiler: false,
+            })
+            .collect()
+    };
+    run_jobs(jobs(plans.iter().flat_map(|p| &p.ui).collect()), opts)?;
+    run_jobs(jobs(plans.iter().flat_map(|p| &p.generate).collect()), opts)
+}
+
+/// Runs the Qt code generators for every library, program and test, without
+/// compiling anything: generated headers such as ui_*.h then exist for the
+/// editor. Used by `easypp watch`.
+pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
+    if project.qt_tools.is_none() {
+        return Ok(());
+    }
+    let libs = lib_components(project, opts);
+    let targets: Vec<Component> = project
+        .bins
+        .iter()
+        .chain(&project.tests)
+        .map(|t| target_component(project, opts, t))
+        .collect();
+    let plans: Vec<&qt::Plan> = libs.values().chain(&targets).map(|c| &c.plan).collect();
+    run_codegen(&plans, opts)
 }
 
 /// One command producing one file: a compilation or a code generator.
@@ -454,12 +477,18 @@ fn compile_command(
     cmd
 }
 
-/// `build/compile_commands.json`, picked up by clangd, VS Code and CLion.
+/// Rewrites `compile_commands.json` if the project's compile commands changed.
+/// Returns the number of entries when the file was (re)written.
+pub fn update_compile_commands(project: &Project, opts: &Options) -> Result<Option<usize>, String> {
+    write_compile_commands(project, opts, &lib_components(project, opts))
+}
+
+/// `compile_commands.json` at the project root, for clangd, VS Code and CLion.
 fn write_compile_commands(
     project: &Project,
     opts: &Options,
     libs: &BTreeMap<String, Component>,
-) -> Result<(), String> {
+) -> Result<Option<usize>, String> {
     let directory = json_str(&path_str(&project.root));
     let targets: Vec<Component> = project
         .bins
@@ -499,13 +528,16 @@ fn write_compile_commands(
         })
         .collect();
 
-    let path = Path::new(BUILD_DIR).join("compile_commands.json");
+    // Older versions wrote it under build/; a stale copy there would confuse editors.
+    let _ = fs::remove_file(Path::new(BUILD_DIR).join(COMPILE_DB));
+
+    let path = Path::new(COMPILE_DB);
     let content = format!("[\n{}\n]\n", entries.join(",\n"));
-    if fs::read_to_string(&path).ok().as_deref() == Some(content.as_str()) {
-        return Ok(());
+    if fs::read_to_string(path).ok().as_deref() == Some(content.as_str()) {
+        return Ok(None);
     }
-    fs::create_dir_all(BUILD_DIR).map_err(|e| format!("cannot create {BUILD_DIR}/: {e}"))?;
-    fs::write(&path, content).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    fs::write(path, content).map_err(|e| format!("cannot write {COMPILE_DB}: {e}"))?;
+    Ok(Some(entries.len()))
 }
 
 fn json_str(s: &str) -> String {

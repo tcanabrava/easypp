@@ -224,7 +224,7 @@ is running in the same project, the tool warns and works without it.
     [Diagnostics], [`-Wall -pedantic -Werror`, always],
     [Profiles], [debug `-O0 -g` (default); `--release` gives `-O2 -DNDEBUG`],
     [Third-party and system headers], [`-isystem`, so their warnings are not the student's problem],
-    [Editor support], [`build/compile_commands.json` @clang-cdb for clangd, VS Code and CLion],
+    [Editor support], [`compile_commands.json` @clang-cdb at the project root, kept current by `easypp watch`],
     [Incrementality], [clang depfiles (`-MMD`), a command stamp per output, parallel compilation, a per-project discovery cache (@sec-cache)],
   ),
   caption: [What every #easypp project gets.],

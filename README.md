@@ -82,7 +82,11 @@ easypp clean
   The flags are always `-Wall -pedantic -Werror`.
 - **Builds are incremental and parallel**: clang depfiles track headers,
   and anything whose flags changed is rebuilt.
-  `build/compile_commands.json` is written for clangd, VS Code and CLion.
+  `compile_commands.json` is written at the project root (where clangd, VS Code
+  and CLion look) on every build. `easypp watch` keeps it up to date while you
+  edit: adding a file, a library or a system `#include` updates it within half
+  a second, without building. In Qt projects it also runs moc, uic and rcc, so
+  a new `ui_form.h` exists as soon as `form.ui` is saved.
 - **Discovery cache**: `build/easypp.db` (an embedded Turso database) stores the
   compiler's search paths, the parsed pkg-config index, which system library
   each header maps to, and each source file's `#include` list. The first build

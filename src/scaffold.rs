@@ -11,7 +11,7 @@ const DIRS: &[&str] = &[
 ];
 
 const FILES: &[(&str, &str)] = &[
-    (".gitignore", "/build/\n"),
+    (".gitignore", "/build/\n/compile_commands.json\n"),
     (
         "src/thirdparty/README.md",
         "Put third-party code here, one folder per project.\n\
