@@ -6,6 +6,7 @@
 //! the inputs come from the depfile clang writes (`-MMD`), so editing a
 //! header rebuilds everything that includes it.
 
+use crate::hints;
 use crate::project::{Kind, Lang, Project, Target};
 use crate::qt::{self, QtFiles};
 use crate::ui;
@@ -235,7 +236,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         .chain(programs.iter().map(|(_, c)| c))
         .map(|c| &c.plan)
         .collect();
-    run_codegen(&plans, opts)?;
+    run_codegen(project, &plans, opts)?;
 
     // 2. Compile (in parallel) everything that is out of date.
     let units = libs
@@ -284,7 +285,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
             });
         }
     }
-    run_jobs(jobs, opts)?;
+    run_jobs(jobs, opts, project)?;
 
     // 3. One static archive per library that has objects.
     let ar = if crate::system::in_path("llvm-ar") {
@@ -303,7 +304,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         if !up_to_date(&archive, &cmd, &objects) {
             ui::status("Archiving", &format!("lib{name}.a"));
             let _ = fs::remove_file(&archive); // `ar r` would keep stale members.
-            run_step(&archive, &cmd, opts.verbose)?;
+            run_step(&archive, &cmd, opts.verbose, None)?;
         }
     }
 
@@ -345,7 +346,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         let inputs: Vec<PathBuf> = objects.into_iter().chain(archives).collect();
         if !up_to_date(&exe, &cmd, &inputs) {
             ui::status("Linking", &exe.display().to_string());
-            run_step(&exe, &cmd, opts.verbose)?;
+            run_step(&exe, &cmd, opts.verbose, Some(project))?;
         }
     }
 
@@ -449,7 +450,7 @@ fn prune_dir(dir: &Path, expected: &HashSet<PathBuf>) -> usize {
 
 /// Runs moc, uic and rcc where their outputs are stale: uic first (sources and
 /// moc may include its headers), then moc and rcc.
-fn run_codegen(plans: &[&qt::Plan], opts: &Options) -> Result<(), String> {
+fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result<(), String> {
     let jobs = |steps: Vec<&qt::Step>| -> Vec<Job> {
         steps
             .into_iter()
@@ -463,8 +464,16 @@ fn run_codegen(plans: &[&qt::Plan], opts: &Options) -> Result<(), String> {
             })
             .collect()
     };
-    run_jobs(jobs(plans.iter().flat_map(|p| &p.ui).collect()), opts)?;
-    run_jobs(jobs(plans.iter().flat_map(|p| &p.generate).collect()), opts)
+    run_jobs(
+        jobs(plans.iter().flat_map(|p| &p.ui).collect()),
+        opts,
+        project,
+    )?;
+    run_jobs(
+        jobs(plans.iter().flat_map(|p| &p.generate).collect()),
+        opts,
+        project,
+    )
 }
 
 /// Runs the Qt code generators for every library, program and test, without
@@ -482,7 +491,7 @@ pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
         .map(|t| target_component(project, opts, t))
         .collect();
     let plans: Vec<&qt::Plan> = libs.values().chain(&targets).map(|c| &c.plan).collect();
-    run_codegen(&plans, opts)
+    run_codegen(project, &plans, opts)
 }
 
 /// One command producing one file: a compilation or a code generator.
@@ -496,7 +505,7 @@ struct Job {
 }
 
 /// Runs jobs in parallel; stops handing out work after the first failure.
-fn run_jobs(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
+fn run_jobs(jobs: Vec<Job>, opts: &Options, project: &Project) -> Result<(), String> {
     if jobs.is_empty() {
         return Ok(());
     }
@@ -505,6 +514,7 @@ fn run_jobs(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
     let queue = Mutex::new(jobs.into_iter());
     let failures = AtomicUsize::new(0);
     let spawn_error: Mutex<Option<String>> = Mutex::new(None);
+    let failed_output: Mutex<String> = Mutex::new(String::new());
 
     std::thread::scope(|scope| {
         for _ in 0..workers {
@@ -540,6 +550,10 @@ fn run_jobs(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
                                 write_stamp(&job.output, &job.cmd);
                             } else {
                                 failures.fetch_add(1, Ordering::Relaxed);
+                                failed_output
+                                    .lock()
+                                    .unwrap()
+                                    .push_str(&String::from_utf8_lossy(&out.stderr));
                             }
                         }
                         Err(e) => {
@@ -555,6 +569,11 @@ fn run_jobs(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
     if let Some(e) = spawn_error.into_inner().unwrap() {
         return Err(e);
     }
+    if compiling {
+        for hint in hints::compile(project, &failed_output.into_inner().unwrap()) {
+            ui::help(&hint);
+        }
+    }
     let what = if compiling { "compile" } else { "be generated" };
     match failures.into_inner() {
         0 => Ok(()),
@@ -564,7 +583,14 @@ fn run_jobs(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
 }
 
 /// Runs a single archive/link step and records its stamp on success.
-fn run_step(output: &Path, cmd: &[String], verbose: bool) -> Result<(), String> {
+/// Runs a single archive/link step. For a link (`project` given), linker
+/// errors get plain-language hints.
+fn run_step(
+    output: &Path,
+    cmd: &[String],
+    verbose: bool,
+    project: Option<&Project>,
+) -> Result<(), String> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
@@ -573,11 +599,20 @@ fn run_step(output: &Path, cmd: &[String], verbose: bool) -> Result<(), String> 
     if verbose {
         eprintln!("{}", cmd.join(" "));
     }
-    let status = Command::new(&cmd[0])
+    let out = Command::new(&cmd[0])
         .args(&cmd[1..])
-        .status()
+        .output()
         .map_err(|e| spawn_failure(&cmd[0], &e))?;
-    if !status.success() {
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(&out.stdout);
+    let _ = err.write_all(&out.stderr);
+    drop(err);
+    if !out.status.success() {
+        if let Some(project) = project {
+            for hint in hints::link(project, &String::from_utf8_lossy(&out.stderr)) {
+                ui::help(&hint);
+            }
+        }
         return Err(format!(
             "`{}` failed while producing {}",
             cmd[0],

@@ -83,6 +83,13 @@ easypp clean
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.
+- **Errors explained**: after a compiler or linker error, easypp adds `help:`
+  lines in plain language. A missing header gets the right `"library/header"`
+  form, a note that Qt 5 is unsupported, or this distribution's command to find
+  the package that provides it. An undefined reference is matched against the
+  project: declared but never defined, defined with a different signature,
+  a class member or destructor without a body, a missing `main()`, or a
+  function from a library whose header is not included.
 - **Sanitizers in debug builds**: debug builds use AddressSanitizer and
   UndefinedBehaviorSanitizer (`-fsanitize=address,undefined`, with undefined
   behaviour fatal). Out-of-bounds access, use-after-free, leaks and signed

@@ -21,6 +21,11 @@ pub fn status(verb: &str, msg: &str) {
     eprintln!("{} {msg}", paint("1;32", &format!("{verb:>12}")));
 }
 
+/// A plain-language hint after an error, cargo-style.
+pub fn help(msg: &str) {
+    eprintln!("{} {msg}", paint("1;36", "help:"));
+}
+
 pub fn warn(msg: &str) {
     eprintln!("{} {msg}", paint("1;33", "warning:"));
 }

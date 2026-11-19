@@ -1,6 +1,7 @@
 mod builder;
 mod cache;
 mod cond;
+mod hints;
 mod project;
 mod qt;
 mod scaffold;
