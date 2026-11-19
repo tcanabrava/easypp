@@ -69,34 +69,46 @@ const FALLBACK_PC_DIRS: &[&str] = &[
 ];
 
 /// Compile flags and link flags.
-type Flags = (Vec<String>, Vec<String>);
+pub type Flags = (Vec<String>, Vec<String>);
 
-struct Package {
-    name: String,
+#[derive(Clone, Debug, PartialEq)]
+pub struct Package {
+    pub name: String,
     /// `-I` folders from Cflags, minus the compiler's default ones.
-    include_dirs: Vec<PathBuf>,
-    cflags: Vec<String>,
-    libs: Vec<String>,
+    pub include_dirs: Vec<PathBuf>,
+    pub cflags: Vec<String>,
+    pub libs: Vec<String>,
+}
+
+/// Everything learned by asking clang and reading pkg-config files. This is
+/// the slow part of start-up (tens of milliseconds), so it is cached per
+/// project and only redone when [`Snapshot::fingerprint`] changes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Snapshot {
+    /// The compiler's `#include <...>` search list.
+    pub include_dirs: Vec<PathBuf>,
+    /// The C++ standard library and compiler built-ins: never a library to link.
+    pub builtin_dirs: Vec<PathBuf>,
+    /// Folders searched for `lib<name>.so` / `.a`.
+    pub lib_dirs: Vec<PathBuf>,
+    /// Folders the linker already searches without `-L`.
+    pub default_lib_dirs: Vec<PathBuf>,
+    /// Folders searched for `.pc` files, existing or not.
+    pub pc_dirs: Vec<PathBuf>,
+    pub packages: Vec<Package>,
+    pub pkg_config: bool,
 }
 
 pub struct System {
-    /// The compiler's `#include <...>` search list.
-    include_dirs: Vec<PathBuf>,
-    /// The C++ standard library and compiler built-ins: never a library to link.
-    builtin_dirs: Vec<PathBuf>,
-    /// Folders searched for `lib<name>.so` / `.a`.
-    lib_dirs: Vec<PathBuf>,
-    /// Folders the linker already searches without `-L`.
+    snapshot: Snapshot,
     default_lib_dirs: HashSet<PathBuf>,
-    packages: Vec<Package>,
     by_name: HashMap<String, usize>,
-    pkg_config: bool,
     resolved: RefCell<HashMap<String, Option<SysDep>>>,
     pkg_flags: RefCell<HashMap<String, Flags>>,
 }
 
-impl System {
-    pub fn detect() -> System {
+impl Snapshot {
+    pub fn detect() -> Snapshot {
         let mut include_dirs: Vec<PathBuf> = Vec::new();
         for lang in ["c++", "c"] {
             for dir in compiler_include_dirs(lang) {
@@ -135,19 +147,39 @@ impl System {
         }
 
         let pkg_config = in_path("pkg-config");
-        let mut system = System {
+        let mut snapshot = Snapshot {
             include_dirs,
             builtin_dirs,
             lib_dirs,
-            default_lib_dirs: default_lib_dirs.into_iter().collect(),
+            default_lib_dirs,
+            pc_dirs: Vec::new(),
             packages: Vec::new(),
-            by_name: HashMap::new(),
             pkg_config,
-            resolved: RefCell::new(HashMap::new()),
-            pkg_flags: RefCell::new(HashMap::new()),
         };
-        system.load_packages();
-        system
+        snapshot.load_packages();
+        snapshot
+    }
+
+    /// Cheap to compute: the tools' and folders' modification times. Installing
+    /// or removing a library or package changes at least one of them.
+    pub fn fingerprint(&self) -> String {
+        let mut parts = vec![
+            format!("easypp {}", env!("CARGO_PKG_VERSION")),
+            format!("PKG_CONFIG_PATH={:?}", std::env::var_os("PKG_CONFIG_PATH")),
+        ];
+        for program in ["clang", "clang++", "pkg-config"] {
+            let path = find_in_path(program);
+            parts.push(format!("{program} {:?} {}", path, stamp(path.as_deref())));
+        }
+        let dirs = self
+            .include_dirs
+            .iter()
+            .chain(&self.lib_dirs)
+            .chain(&self.pc_dirs);
+        for dir in dirs {
+            parts.push(format!("{} {}", dir.display(), stamp(Some(dir))));
+        }
+        parts.join("\n")
     }
 
     fn load_packages(&mut self) {
@@ -163,6 +195,7 @@ impl System {
             None => dirs.extend(FALLBACK_PC_DIRS.iter().map(PathBuf::from)),
         }
 
+        self.pc_dirs = dirs.clone();
         let mut seen = HashSet::new();
         for dir in dirs {
             let Ok(entries) = fs::read_dir(&dir) else {
@@ -184,12 +217,47 @@ impl System {
                 package
                     .include_dirs
                     .retain(|d| !self.include_dirs.contains(d));
-                self.by_name
-                    .entry(normalize(&package.name))
-                    .or_insert(self.packages.len());
                 self.packages.push(package);
             }
         }
+    }
+}
+
+impl System {
+    /// Asks the compiler and pkg-config from scratch.
+    pub fn detect() -> System {
+        System::new(Snapshot::detect(), HashMap::new(), HashMap::new())
+    }
+
+    /// Builds the lookup state from a snapshot and previously resolved answers.
+    pub fn new(
+        snapshot: Snapshot,
+        resolved: HashMap<String, Option<SysDep>>,
+        pkg_flags: HashMap<String, Flags>,
+    ) -> System {
+        let mut by_name = HashMap::new();
+        for (i, package) in snapshot.packages.iter().enumerate() {
+            by_name.entry(normalize(&package.name)).or_insert(i);
+        }
+        System {
+            default_lib_dirs: snapshot.default_lib_dirs.iter().cloned().collect(),
+            snapshot,
+            by_name,
+            resolved: RefCell::new(resolved),
+            pkg_flags: RefCell::new(pkg_flags),
+        }
+    }
+
+    pub fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+
+    /// Every header and package answered so far, for the cache.
+    pub fn answers(&self) -> (HashMap<String, Option<SysDep>>, HashMap<String, Flags>) {
+        (
+            self.resolved.borrow().clone(),
+            self.pkg_flags.borrow().clone(),
+        )
     }
 
     /// The system library behind an `#include`, if any.
@@ -213,8 +281,13 @@ impl System {
         }
 
         // In the compiler's default folders: guess the library from the header's name.
-        if let Some(dir) = self.include_dirs.iter().find(|d| d.join(include).is_file()) {
-            if self.builtin_dirs.contains(dir) {
+        if let Some(dir) = self
+            .snapshot
+            .include_dirs
+            .iter()
+            .find(|d| d.join(include).is_file())
+        {
+            if self.snapshot.builtin_dirs.contains(dir) {
                 return None;
             }
             return self
@@ -226,7 +299,8 @@ impl System {
         // do (gtk+-2.0, gtk+-3.0, gtk4 all have <gtk/gtk.h>), prefer the most
         // specific folder, then the package with the fewest folders, then the
         // shortest name (gtk4 over gtk4-x11), then the newest-looking name.
-        self.packages
+        self.snapshot
+            .packages
             .iter()
             .flat_map(|p| p.include_dirs.iter().map(move |d| (p, d)))
             .filter(|(_, d)| d.join(include).is_file())
@@ -247,13 +321,13 @@ impl System {
             [n.clone(), format!("lib{n}")]
                 .iter()
                 .find_map(|key| self.by_name.get(key))
-                .map(|&i| SysDep::Pkg(self.packages[i].name.clone()))
+                .map(|&i| SysDep::Pkg(self.snapshot.packages[i].name.clone()))
         })
     }
 
     fn library_file_named_like(&self, include: &str) -> Option<SysDep> {
         for name in candidates(include) {
-            for dir in &self.lib_dirs {
+            for dir in &self.snapshot.lib_dirs {
                 let found = ["so", "a"]
                     .iter()
                     .any(|ext| dir.join(format!("lib{name}.{ext}")).is_file());
@@ -312,7 +386,7 @@ impl System {
         if let Some(flags) = self.pkg_flags.borrow().get(name) {
             return flags.clone();
         }
-        let from_tool = self.pkg_config.then(|| {
+        let from_tool = self.snapshot.pkg_config.then(|| {
             let run = |what: &str| -> Result<Vec<String>, String> {
                 let out = Command::new("pkg-config")
                     .args([what, name])
@@ -334,7 +408,12 @@ impl System {
                         "pkg-config failed for '{name}', using its .pc file as is: {e}"
                     ));
                 }
-                let p = self.packages.iter().find(|p| p.name == name).unwrap();
+                let p = self
+                    .snapshot
+                    .packages
+                    .iter()
+                    .find(|p| p.name == name)
+                    .unwrap();
                 (p.cflags.clone(), p.libs.clone())
             }
         };
@@ -431,8 +510,28 @@ fn capture(program: &str, args: &[&str]) -> Option<String> {
 }
 
 pub fn in_path(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+    find_in_path(program).is_some()
+}
+
+fn find_in_path(program: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(program))
+        .find(|p| p.is_file())
+        .map(|p| fs::canonicalize(&p).unwrap_or(p))
+}
+
+/// "mtime size" of a file or folder, or "missing".
+fn stamp(path: Option<&Path>) -> String {
+    let Some(meta) = path.and_then(|p| fs::metadata(p).ok()) else {
+        return "missing".into();
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    format!("{mtime} {}", meta.len())
 }
 
 /// Minimal `.pc` reader: variables, `Cflags:` and `Libs:`.
@@ -522,17 +621,16 @@ mod tests {
 
     #[test]
     fn link_flags_are_deduplicated() {
-        let system = System {
+        let snapshot = Snapshot {
             include_dirs: vec![],
             builtin_dirs: vec![],
             lib_dirs: vec![],
-            default_lib_dirs: HashSet::new(),
+            default_lib_dirs: vec![],
+            pc_dirs: vec![],
             packages: vec![],
-            by_name: HashMap::new(),
             pkg_config: false,
-            resolved: RefCell::new(HashMap::new()),
-            pkg_flags: RefCell::new(HashMap::new()),
         };
+        let system = System::new(snapshot, HashMap::new(), HashMap::new());
         let m = SysDep::Lib {
             name: "m".into(),
             dir: None,

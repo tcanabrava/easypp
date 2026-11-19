@@ -64,6 +64,14 @@ easypp clean
 - **Builds are incremental and parallel**: clang depfiles track headers,
   and anything whose flags changed is rebuilt.
   `build/compile_commands.json` is written for clangd, VS Code and CLion.
+- **Discovery cache**: `build/easypp.db` (an embedded Turso database) stores the
+  compiler's search paths, the parsed pkg-config index, which system library
+  each header maps to, and each source file's `#include` list. The first build
+  fills it, which takes about 0.2 s longer. Later runs skip detection, so a
+  no-op build takes about 10 ms instead of about 100 ms. The system part is
+  redone when clang, pkg-config, `PKG_CONFIG_PATH` or any include, library or
+  pkg-config folder changes. `--no-cache` ignores the cache, and `easypp clean`
+  deletes it.
 
 ## Building easypp
 

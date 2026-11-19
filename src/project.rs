@@ -11,8 +11,10 @@
 //!         tests/          one test executable per file (or per sub-folder)
 //! ```
 
+use crate::cache::{Cache, IncludeIndex};
 use crate::system::{SysDep, System};
 use crate::ui;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -115,7 +117,9 @@ pub fn find_root(start: &Path) -> Result<PathBuf, String> {
 }
 
 /// Discovers the project. The current directory must be the project root.
-pub fn discover(root: &Path) -> Result<Project, String> {
+/// With a cache, unchanged files are not re-read and the system is not
+/// re-detected.
+pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, String> {
     // Libraries.
     let mut libs = BTreeMap::new();
     for entry in sorted_entries(Path::new(LIBS_DIR)) {
@@ -159,8 +163,12 @@ pub fn discover(root: &Path) -> Result<Project, String> {
         }
     }
 
-    let resolver = Resolver::new(&libs, &system_includes);
-    let system = System::detect();
+    let index = cache.as_mut().map(|c| c.take_index()).unwrap_or_default();
+    let resolver = Resolver::new(&libs, &system_includes, index);
+    let system = match cache.as_mut() {
+        Some(c) => c.system(),
+        None => System::detect(),
+    };
 
     for lib in libs.values_mut() {
         let (deps, external) = resolver.scan(walk(&lib.dir), Some(&lib.name));
@@ -191,6 +199,12 @@ pub fn discover(root: &Path) -> Result<Project, String> {
     };
     let bins = discover_targets(Path::new(BIN_DIR), Kind::Bin, &ctx)?;
     let tests = discover_targets(Path::new(TESTS_DIR), Kind::Test, &ctx)?;
+
+    if let Some(c) = cache
+        && let Err(e) = c.save(&system, resolver.index.into_inner())
+    {
+        ui::warn(&format!("could not update the build cache: {e}"));
+    }
 
     Ok(Project {
         root: root.to_path_buf(),
@@ -345,10 +359,11 @@ struct Resolver {
     /// (name, relative dir, canonical dir)
     libs: Vec<(String, PathBuf, PathBuf)>,
     thirdparty: Vec<PathBuf>,
+    index: RefCell<IncludeIndex>,
 }
 
 impl Resolver {
-    fn new(libs: &BTreeMap<String, Library>, thirdparty: &[PathBuf]) -> Self {
+    fn new(libs: &BTreeMap<String, Library>, thirdparty: &[PathBuf], index: IncludeIndex) -> Self {
         Resolver {
             libs_root: PathBuf::from(LIBS_DIR),
             libs: libs
@@ -359,6 +374,7 @@ impl Resolver {
                 })
                 .collect(),
             thirdparty: thirdparty.to_vec(),
+            index: RefCell::new(index),
         }
     }
 
@@ -406,9 +422,10 @@ impl Resolver {
         visited.extend(work.iter().cloned());
 
         while let Some(file) = work.pop() {
-            let Ok(bytes) = fs::read(&file) else { continue };
-            let text = String::from_utf8_lossy(&bytes);
-            for include in includes(&text) {
+            let file_includes = self.index.borrow_mut().includes(&file, |text| {
+                includes(text).into_iter().map(String::from).collect()
+            });
+            for include in &file_includes {
                 let Some(header) = self.resolve(&file, include) else {
                     external.insert(include.to_string());
                     continue;

@@ -26,6 +26,8 @@ pub struct Options {
     pub release: bool,
     pub jobs: usize,
     pub verbose: bool,
+    /// Use `build/easypp.db` to skip re-detection and re-scanning.
+    pub cache: bool,
 }
 
 impl Options {

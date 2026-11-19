@@ -1,4 +1,5 @@
 mod builder;
+mod cache;
 mod project;
 mod scaffold;
 mod system;
@@ -28,6 +29,7 @@ Options:
   -r, --release         Optimized build (-O2 -DNDEBUG) instead of debug (-O0 -g)
   -j, --jobs <N>        Parallel compile jobs (default: number of CPUs)
   -v, --verbose         Print every compiler command
+      --no-cache        Ignore build/easypp.db (detect and scan everything)
   -h, --help            Show this help
 
 Layout:
@@ -55,6 +57,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
         release: false,
         jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
         verbose: false,
+        cache: true,
     };
 
     let mut it = args.into_iter();
@@ -66,6 +69,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
             }
             "-r" | "--release" => opts.release = true,
             "-v" | "--verbose" => opts.verbose = true,
+            "--no-cache" => opts.cache = false,
             "-h" | "--help" => command = Some("help".to_string()),
             "-j" | "--jobs" => {
                 let value = it.next().ok_or("-j needs a number")?;
@@ -142,7 +146,30 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let project = project::discover(&root)?;
+    let mut cache = if cli.opts.cache {
+        match cache::Cache::open(Path::new(builder::BUILD_DIR)) {
+            Ok(cache) => Some(cache),
+            Err(e) => {
+                ui::warn(&format!(
+                    "build cache unavailable ({e}); continuing without it"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let project = project::discover(&root, cache.as_mut())?;
+    if cli.opts.verbose {
+        match &cache {
+            Some(c) if c.redetected() => {
+                eprintln!("cache: detected the system, saved to build/easypp.db")
+            }
+            Some(_) => eprintln!("cache: system and include lists from build/easypp.db"),
+            None => eprintln!("cache: not used"),
+        }
+    }
+    drop(cache);
     match cli.command.as_str() {
         "build" => {
             let targets: Vec<&Target> = project.bins.iter().collect();
