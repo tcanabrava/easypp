@@ -50,6 +50,8 @@ easypp clean
      `/usr/lib64`, ...: `<pthread.h>` → `-lpthread`. Libraries outside the
      linker's default folders get `-L` and an rpath.
   4. `<math.h>` → `-lm`.
+  5. OpenMP: `<omp.h>` or any `#pragma omp` line adds `-fopenmp` to compiling
+     and linking.
 
   Header-only libraries (`<nlohmann/json.hpp>`) link nothing. The flags come
   from `pkg-config`, which also follows `Requires:`. Without `pkg-config` they

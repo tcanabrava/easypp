@@ -28,12 +28,19 @@ pub enum SysDep {
     Pkg(String),
     /// A plain `-l<name>`. `dir` is set when the linker does not search it by default.
     Lib { name: String, dir: Option<PathBuf> },
+    /// OpenMP: `-fopenmp` when compiling and linking. Found from `<omp.h>` or
+    /// from any `#pragma omp` line, since pragmas need no header.
+    OpenMp,
 }
+
+/// What `includes()` reports for a `#pragma omp` line.
+pub const OPENMP_PRAGMA: &str = "#pragma omp";
 
 impl SysDep {
     pub fn label(&self) -> String {
         match self {
             SysDep::Pkg(name) => name.clone(),
+            SysDep::OpenMp => "openmp".into(),
             SysDep::Lib { name, dir: None } => format!("-l{name}"),
             SysDep::Lib {
                 name,
@@ -273,6 +280,10 @@ impl System {
     }
 
     fn lookup(&self, include: &str) -> Option<SysDep> {
+        // <omp.h> ships with the compiler, so it would otherwise count as a built-in.
+        if include == "omp.h" || include == OPENMP_PRAGMA {
+            return Some(SysDep::OpenMp);
+        }
         if let Some(name) = libc_extra(include) {
             return Some(SysDep::Lib {
                 name: name.into(),
@@ -345,13 +356,17 @@ impl System {
     pub fn compile_flags(&self, deps: &BTreeSet<SysDep>) -> Vec<String> {
         let mut out = Vec::new();
         for dep in deps {
-            if let SysDep::Pkg(name) = dep {
-                for flag in self.flags_for(name).0 {
-                    match flag.strip_prefix("-I") {
-                        Some(dir) => push_pair(&mut out, "-isystem", dir),
-                        None => push_unique(&mut out, flag),
+            match dep {
+                SysDep::Pkg(name) => {
+                    for flag in self.flags_for(name).0 {
+                        match flag.strip_prefix("-I") {
+                            Some(dir) => push_pair(&mut out, "-isystem", dir),
+                            None => push_unique(&mut out, flag),
+                        }
                     }
                 }
+                SysDep::OpenMp => push_unique(&mut out, "-fopenmp".into()),
+                SysDep::Lib { .. } => {}
             }
         }
         out
@@ -377,6 +392,7 @@ impl System {
                     }
                     push_unique(&mut out, format!("-l{name}"));
                 }
+                SysDep::OpenMp => push_unique(&mut out, "-fopenmp".into()),
             }
         }
         out

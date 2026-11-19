@@ -12,7 +12,7 @@
 //! ```
 
 use crate::cache::{Cache, IncludeIndex};
-use crate::system::{SysDep, System};
+use crate::system::{OPENMP_PRAGMA, SysDep, System};
 use crate::ui;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -447,16 +447,21 @@ impl Resolver {
     }
 }
 
-/// Extracts the targets of `#include "..."` and `#include <...>` lines.
+/// Extracts the targets of `#include "..."` and `#include <...>` lines. A
+/// `#pragma omp` line is reported as [`OPENMP_PRAGMA`], once per file.
 fn includes(text: &str) -> Vec<&str> {
-    text.lines()
+    let mut openmp = false;
+    let mut out: Vec<&str> = text
+        .lines()
         .filter_map(|line| {
-            let rest = line
-                .trim_start()
-                .strip_prefix('#')?
-                .trim_start()
-                .strip_prefix("include")?
-                .trim_start();
+            let directive = line.trim_start().strip_prefix('#')?.trim_start();
+            if let Some(pragma) = directive.strip_prefix("pragma")
+                && pragma.trim_start().starts_with("omp")
+            {
+                openmp = true;
+                return None;
+            }
+            let rest = directive.strip_prefix("include")?.trim_start();
             let close = match rest.chars().next()? {
                 '"' => '"',
                 '<' => '>',
@@ -465,7 +470,11 @@ fn includes(text: &str) -> Vec<&str> {
             let rest = &rest[1..];
             Some(&rest[..rest.find(close)?])
         })
-        .collect()
+        .collect();
+    if openmp {
+        out.push(OPENMP_PRAGMA);
+    }
+    out
 }
 
 fn file_name(path: &Path) -> String {
@@ -507,6 +516,14 @@ mod tests {
     fn parses_include_lines() {
         let text = "#include <vector>\n  #  include \"a/b.hpp\" // x\n#define X\n#include MACRO\n";
         assert_eq!(includes(text), vec!["vector", "a/b.hpp"]);
+    }
+
+    #[test]
+    fn reports_openmp_pragmas() {
+        let text =
+            "#include <cstdio>\n  #pragma omp parallel for\n#pragma once\n# pragma  omp simd\n";
+        assert_eq!(includes(text), vec!["cstdio", OPENMP_PRAGMA]);
+        assert_eq!(includes("#pragma once\n"), Vec::<&str>::new());
     }
 
     #[test]

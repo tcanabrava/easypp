@@ -27,7 +27,7 @@ use std::time::UNIX_EPOCH;
 use turso::{Connection, Database, Value};
 
 /// Bump when the tables below change; older caches are recreated.
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2"; // 2: include lists record `#pragma omp`
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -239,6 +239,7 @@ impl Cache {
         for r in self.rows("SELECT include_name, kind, name, dir FROM headers")? {
             let dep = match (text(&r[1]).as_str(), &r[3]) {
                 ("pkg", _) => Some(SysDep::Pkg(text(&r[2]))),
+                ("openmp", _) => Some(SysDep::OpenMp),
                 ("lib", Value::Null) => Some(SysDep::Lib {
                     name: text(&r[2]),
                     dir: None,
@@ -341,6 +342,7 @@ impl Cache {
             let (kind, name, dir) = match dep {
                 None => ("NULL".to_string(), "NULL".to_string(), "NULL".to_string()),
                 Some(SysDep::Pkg(name)) => (quote("pkg"), quote(name), "NULL".into()),
+                Some(SysDep::OpenMp) => (quote("openmp"), "NULL".into(), "NULL".into()),
                 Some(SysDep::Lib { name, dir }) => (
                     quote("lib"),
                     quote(name),
