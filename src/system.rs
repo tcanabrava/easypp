@@ -411,25 +411,21 @@ impl System {
         if deps.is_empty() {
             return Vec::new();
         }
-        let mut out = vec!["-Wl,--as-needed".to_string()];
+        let mut all = vec!["-Wl,--as-needed".to_string()];
         for dep in deps {
             match dep {
-                SysDep::Pkg(name) => {
-                    for flag in self.flags_for(name).1 {
-                        push_unique(&mut out, flag);
-                    }
-                }
+                SysDep::Pkg(name) => all.extend(self.flags_for(name).1),
                 SysDep::Lib { name, dir } => {
                     if let Some(dir) = dir {
-                        push_unique(&mut out, format!("-L{}", dir.display()));
-                        push_unique(&mut out, format!("-Wl,-rpath,{}", dir.display()));
+                        all.push(format!("-L{}", dir.display()));
+                        all.push(format!("-Wl,-rpath,{}", dir.display()));
                     }
-                    push_unique(&mut out, format!("-l{name}"));
+                    all.push(format!("-l{name}"));
                 }
-                SysDep::OpenMp => push_unique(&mut out, "-fopenmp".into()),
+                SysDep::OpenMp => all.push("-fopenmp".into()),
             }
         }
-        out
+        dedup_link_flags(all)
     }
 
     fn flags_for(&self, name: &str) -> Flags {
@@ -529,6 +525,28 @@ fn normalize(name: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_lowercase())
         .collect()
+}
+
+/// Removes repeated link flags without breaking static linking: a library
+/// (`-lfoo`, `libfoo.a`, `libfoo.so`) keeps its *last* occurrence, so it
+/// still comes after every library that needs it; other flags (`-L`,
+/// `-Wl,...`) keep their first.
+fn dedup_link_flags(flags: Vec<String>) -> Vec<String> {
+    let is_library = |f: &str| {
+        f.starts_with("-l") || f.ends_with(".a") || f.ends_with(".so") || f.contains(".so.")
+    };
+    let mut out: Vec<String> = Vec::new();
+    for (i, flag) in flags.iter().enumerate() {
+        let keep = if is_library(flag) {
+            !flags[i + 1..].contains(flag)
+        } else {
+            !out.contains(flag)
+        };
+        if keep {
+            out.push(flag.clone());
+        }
+    }
+    out
 }
 
 fn push_unique(out: &mut Vec<String>, flag: String) {
@@ -779,6 +797,30 @@ mod tests {
             name: "foo".into(),
             dir: Some("/usr/local/lib".into()),
         };
+        // Static order: a, z, b, z must become a, b, z (z after both users).
+        let lib = |n: &str| SysDep::Lib {
+            name: n.into(),
+            dir: None,
+        };
+        assert_eq!(
+            system.link_flags(&[lib("a"), lib("z"), lib("b"), lib("z")]),
+            vec!["-Wl,--as-needed", "-la", "-lb", "-lz"]
+        );
+        assert_eq!(
+            dedup_link_flags(
+                [
+                    "-L/x",
+                    "-lfoo",
+                    "/p/libbar.a",
+                    "-L/x",
+                    "-lbaz",
+                    "/p/libbar.a"
+                ]
+                .map(String::from)
+                .into()
+            ),
+            vec!["-L/x", "-lfoo", "-lbaz", "/p/libbar.a"]
+        );
         assert_eq!(
             system.link_flags(&[local, m.clone(), m]),
             vec![
