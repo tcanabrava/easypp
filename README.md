@@ -83,6 +83,13 @@ easypp clean
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.
+- **Sanitizers in debug builds**: debug builds use AddressSanitizer and
+  UndefinedBehaviorSanitizer (`-fsanitize=address,undefined`, with undefined
+  behaviour fatal). Out-of-bounds access, use-after-free, leaks and signed
+  overflow stop the program with a report naming the source line. Leaks that
+  GUI and system libraries (GTK, Qt, SDL, fontconfig, Mesa, ...) keep until
+  exit on purpose are suppressed, so reports are about your code. Release
+  builds have no sanitizers; `--no-sanitize` turns them off in debug.
 - **Builds are incremental and parallel**: clang depfiles track headers,
   and anything whose flags changed is rebuilt.
   `compile_commands.json` is written at the project root (where clangd, VS Code

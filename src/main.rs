@@ -31,10 +31,12 @@ Commands:
   clean                 Remove the build/ folder
 
 Options:
-  -r, --release         Optimized build (-O2 -DNDEBUG) instead of debug (-O0 -g)
+  -r, --release         Optimized build (-O2 -DNDEBUG) instead of debug
+                        (-O0 -g, with AddressSanitizer and UBSan)
   -j, --jobs <N>        Parallel compile jobs (default: number of CPUs)
   -v, --verbose         Print every compiler command
       --no-cache        Ignore build/easypp.db (detect and scan everything)
+      --no-sanitize     Debug builds without AddressSanitizer/UBSan
   -h, --help            Show this help
   -V, --version         Show the version
 
@@ -64,6 +66,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
         jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
         verbose: false,
         cache: true,
+        sanitize: true,
     };
 
     let mut it = args.into_iter();
@@ -77,6 +80,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
             "--watch" if command.is_none() => command = Some("watch".to_string()),
             "-v" | "--verbose" => opts.verbose = true,
             "--no-cache" => opts.cache = false,
+            "--no-sanitize" => opts.sanitize = false,
             "-h" | "--help" => command = Some("help".to_string()),
             "-V" | "--version" => command = Some("version".to_string()),
             "-j" | "--jobs" => {
