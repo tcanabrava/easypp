@@ -9,7 +9,7 @@
 use crate::project::{Kind, Lang, Project, Target};
 use crate::qt::{self, QtFiles};
 use crate::ui;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -255,6 +255,15 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         }
     }
 
+    // 5. Remove what no longer belongs to the project.
+    let removed = prune(project, opts, &libs);
+    if removed > 0 {
+        ui::status(
+            "Removed",
+            &format!("{removed} stale file(s) from {}", opts.dir().display()),
+        );
+    }
+
     let kind = if opts.release {
         "optimized"
     } else {
@@ -269,6 +278,74 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         ),
     );
     Ok(())
+}
+
+/// Deletes files under build/<profile>/{bin,tests,lib,obj,gen} that no current
+/// library, program, test or source produces (deleted targets, renamed
+/// files, ...), with their .cmd/.d companions, and then empty folders.
+/// Returns how many files were removed.
+fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) -> usize {
+    let targets: Vec<(&Target, Component)> = project
+        .bins
+        .iter()
+        .chain(&project.tests)
+        .map(|t| (t, target_component(project, opts, t)))
+        .collect();
+    let components = libs.values().chain(targets.iter().map(|(_, c)| c));
+
+    let mut expected: HashSet<PathBuf> = HashSet::new();
+    for c in components {
+        for src in c.sources.iter().chain(&c.resources) {
+            expected.insert(object_path(opts, src));
+        }
+        for step in c.plan.ui.iter().chain(&c.plan.generate) {
+            expected.insert(step.output.clone());
+        }
+    }
+    for (name, lib) in libs {
+        if !lib.sources.is_empty() {
+            expected.insert(archive_path(opts, name));
+        }
+    }
+    for (target, _) in &targets {
+        expected.insert(exe_path(opts, target));
+    }
+
+    let mut removed = 0;
+    for sub in ["bin", "tests", "lib", "obj", "gen"] {
+        removed += prune_dir(&opts.dir().join(sub), &expected);
+    }
+    removed
+}
+
+/// Removes unexpected files under `dir` (recursively) and empty folders.
+fn prune_dir(dir: &Path, expected: &HashSet<PathBuf>) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            removed += prune_dir(&path, expected);
+            let _ = fs::remove_dir(&path); // only succeeds when empty
+            continue;
+        }
+        // `x.o.d` and `x.o.cmd` belong to `x.o`.
+        let owner = ["cmd", "d"]
+            .iter()
+            .find_map(|ext| {
+                path.to_str()
+                    .and_then(|p| p.strip_suffix(&format!(".{ext}")))
+                    .map(PathBuf::from)
+            })
+            .filter(|base| expected.contains(base))
+            .unwrap_or_else(|| path.clone());
+        if !expected.contains(&owner) && fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Runs moc, uic and rcc where their outputs are stale: uic first (sources and
