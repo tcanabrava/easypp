@@ -27,7 +27,7 @@ use std::time::UNIX_EPOCH;
 use turso::{Connection, Database, Value};
 
 /// Bump when the tables below change; older caches are recreated.
-const SCHEMA_VERSION: &str = "2"; // 2: include lists record `#pragma omp`
+const SCHEMA_VERSION: &str = "3"; // 2: `#pragma omp`; 3: Q_OBJECT markers in include lists
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

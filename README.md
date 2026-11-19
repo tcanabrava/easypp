@@ -62,6 +62,21 @@ easypp clean
   directly or through the internal libraries it uses. System libraries are linked with
   `-Wl,--as-needed`, so an unnecessary guess is dropped by the linker.
   `easypp info` shows what was picked.
+- **Qt 6** (Qt 5 is not supported): `<QtWidgets/...>`, `<QtWidgets>` or a bare `<QPushButton>`
+  links the right module, and pkg-config brings in the modules it needs (Core,
+  Gui). Anything using Qt is compiled with `-fPIC`, which Qt requires. Code
+  generation needs no setup either:
+  - **moc**: a header with `Q_OBJECT`, `Q_GADGET` or `Q_NAMESPACE` gets
+    `moc_<name>.cpp`, compiled into its library or program. A `.cpp` with
+    `Q_OBJECT` gets `<name>.moc`, for `#include "<name>.moc"` at its end.
+  - **uic**: `form.ui` gives `ui_form.h`, generated before anything compiles.
+  - **rcc**: `res.qrc` gives `qrc_res.cpp`. For a library, the resources are
+    linked straight into each program that uses it (in a static archive they
+    would be dropped), and editing a file the `.qrc` lists regenerates it.
+
+  Generated files go to `build/<profile>/gen/`, which is on the include path of
+  the component and of everything that uses it. The tools are found through
+  pkg-config (`/usr/lib/qt6/moc` and so on), not PATH.
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++20`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.

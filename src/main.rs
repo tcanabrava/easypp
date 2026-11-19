@@ -1,6 +1,7 @@
 mod builder;
 mod cache;
 mod project;
+mod qt;
 mod scaffold;
 mod system;
 mod ui;
@@ -336,6 +337,9 @@ fn print_info(project: &Project) {
         if !sys.is_empty() {
             println!("  {:<41} system: {}", "", sys.join(", "));
         }
+        if !lib.qt.is_empty() {
+            println!("  {:<41} qt: {}", "", lib.qt.summary());
+        }
     }
 
     for (title, targets) in [("executables", &project.bins), ("tests", &project.tests)] {
@@ -349,6 +353,9 @@ fn print_info(project: &Project) {
                 let sys: Vec<String> = t.system.iter().map(|d| d.label()).collect();
                 println!("  {:<20} system: {}", "", sys.join(", "));
             }
+            if !t.qt.is_empty() {
+                println!("  {:<20} qt: {}", "", t.qt.summary());
+            }
         }
     }
 
@@ -359,5 +366,14 @@ fn print_info(project: &Project) {
             .map(|p| p.display().to_string())
             .collect();
         println!("\nthird-party include paths:\n  {}", dirs.join("\n  "));
+    }
+    if let Some(tools) = &project.qt_tools {
+        println!(
+            "\n{} tools:\n  {}\n  {}\n  {}",
+            tools.version,
+            tools.moc.display(),
+            tools.uic.display(),
+            tools.rcc.display()
+        );
     }
 }

@@ -417,8 +417,8 @@ build file of a project the students already know. A command that writes that
 serious limitation for teaching, since many students use Windows. Code::Blocks, for instance, is
 distributed for Windows with a bundled MinGW compiler @codeblocks. It does not download packages:
 system libraries must be installed, and third-party code must be header-only in
-`src/thirdparty`. It has no per-target flags, code generation, install step or
-C++20 modules. Modules would break the include-based discovery. These are not
+`src/thirdparty`. It has no per-target flags, code generation other than Qt's
+(moc, uic, rcc), install step or C++20 modules. Modules would break the include-based discovery. These are not
 oversights: each one would add a configuration surface. But they put a clear limit
 on where the tool can be used.
 

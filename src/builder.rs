@@ -7,7 +7,9 @@
 //! header rebuilds everything that includes it.
 
 use crate::project::{Kind, Lang, Project, Target};
+use crate::qt::{self, QtFiles};
 use crate::ui;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -49,39 +51,176 @@ pub fn exe_path(opts: &Options, target: &Target) -> PathBuf {
     opts.dir().join(sub).join(&target.name)
 }
 
+/// A library or program with everything needed to build it, including the
+/// files Qt's code generators produce for it.
+struct Component {
+    /// Own sources plus generated moc_*.cpp.
+    sources: Vec<PathBuf>,
+    /// Generated qrc_*.cpp: linked straight into programs, never archived.
+    resources: Vec<PathBuf>,
+    /// System flags plus the generated-file folders on the include path.
+    cflags: Vec<String>,
+    plan: qt::Plan,
+}
+
+fn gen_dir(opts: &Options, key: &str) -> PathBuf {
+    opts.dir().join("gen").join(key)
+}
+
+fn lib_key(name: &str) -> String {
+    format!("libs/{name}")
+}
+
+fn target_key(target: &Target) -> String {
+    let sub = match target.kind {
+        Kind::Bin => "bin",
+        Kind::Test => "tests",
+    };
+    format!("{sub}/{}", target.name)
+}
+
+fn component(
+    project: &Project,
+    opts: &Options,
+    key: &str,
+    sources: &[PathBuf],
+    system_cflags: &[String],
+    qt_files: &QtFiles,
+    closure: &[String],
+) -> Component {
+    let mut cflags = system_cflags.to_vec();
+    if !qt_files.is_empty() {
+        cflags.push(format!("-I{}", gen_dir(opts, key).display()));
+    }
+    // Headers of used libraries may include their ui_*.h.
+    for lib in closure {
+        if !project.libs[lib].qt.is_empty() {
+            cflags.push(format!("-I{}", gen_dir(opts, &lib_key(lib)).display()));
+        }
+    }
+    let plan = match &project.qt_tools {
+        Some(tools) if !qt_files.is_empty() => {
+            let mut flags = base_includes(project);
+            flags.extend(cflags.iter().cloned());
+            qt::plan(tools, qt_files, &gen_dir(opts, key), &qt::moc_flags(&flags))
+        }
+        _ => qt::Plan::default(),
+    };
+    let mut all_sources = sources.to_vec();
+    all_sources.extend(plan.sources.iter().cloned());
+    Component {
+        sources: all_sources,
+        resources: plan.resources.clone(),
+        cflags,
+        plan,
+    }
+}
+
+fn lib_components(project: &Project, opts: &Options) -> BTreeMap<String, Component> {
+    project
+        .lib_order
+        .iter()
+        .map(|name| {
+            let lib = &project.libs[name];
+            let c = component(
+                project,
+                opts,
+                &lib_key(name),
+                &lib.sources,
+                &lib.cflags,
+                &lib.qt,
+                &lib.closure,
+            );
+            (name.clone(), c)
+        })
+        .collect()
+}
+
+fn target_component(project: &Project, opts: &Options, target: &Target) -> Component {
+    component(
+        project,
+        opts,
+        &target_key(target),
+        &target.sources,
+        &target.cflags,
+        &target.qt,
+        &target.libs,
+    )
+}
+
 /// Builds every library plus the given executables.
 pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(), String> {
     let start = Instant::now();
-    write_compile_commands(project, opts)?;
+    let libs = lib_components(project, opts);
+    let programs: Vec<(&Target, Component)> = targets
+        .iter()
+        .map(|t| (*t, target_component(project, opts, t)))
+        .collect();
+    write_compile_commands(project, opts, &libs)?;
 
-    // 1. Compile (in parallel) everything that is out of date.
-    let jobs: Vec<Job> = units(project, targets)
-        .into_iter()
+    // 1. Qt code generation: uic first (sources and moc may include its
+    //    headers), then moc and rcc.
+    let plans: Vec<&qt::Plan> = libs
+        .values()
+        .chain(programs.iter().map(|(_, c)| c))
+        .map(|c| &c.plan)
+        .collect();
+    let codegen = |steps: Vec<&qt::Step>| -> Vec<Job> {
+        steps
+            .into_iter()
+            .filter(|s| !up_to_date(&s.output, &s.cmd, &s.inputs))
+            .map(|s| Job {
+                verb: "Generating",
+                label: format!("{} {}", s.tool, s.input.display()),
+                output: s.output.clone(),
+                cmd: s.cmd.clone(),
+                compiler: false,
+            })
+            .collect()
+    };
+    run_jobs(codegen(plans.iter().flat_map(|p| &p.ui).collect()), opts)?;
+    run_jobs(
+        codegen(plans.iter().flat_map(|p| &p.generate).collect()),
+        opts,
+    )?;
+
+    // 2. Compile (in parallel) everything that is out of date.
+    let units = libs
+        .values()
+        .chain(programs.iter().map(|(_, c)| c))
+        .flat_map(|c| {
+            c.sources
+                .iter()
+                .chain(&c.resources)
+                .map(move |s| (s, c.cflags.as_slice()))
+        });
+    let jobs: Vec<Job> = units
         .map(|(src, cflags)| {
             let obj = object_path(opts, src);
             let cmd = compile_command(project, opts, src, &obj, cflags);
-            Job {
-                src: src.clone(),
-                obj,
-                cmd,
-            }
+            (src, obj, cmd)
         })
-        .filter(|job| {
-            !depfile_inputs(&depfile_path(&job.obj))
-                .is_some_and(|inputs| up_to_date(&job.obj, &job.cmd, &inputs))
+        .filter(|(_, obj, cmd)| {
+            !depfile_inputs(&depfile_path(obj)).is_some_and(|inputs| up_to_date(obj, cmd, &inputs))
+        })
+        .map(|(src, obj, cmd)| Job {
+            verb: "Compiling",
+            label: src.display().to_string(),
+            output: obj,
+            cmd,
+            compiler: true,
         })
         .collect();
-    compile_all(jobs, opts)?;
+    run_jobs(jobs, opts)?;
 
-    // 2. One static archive per library that has sources.
+    // 3. One static archive per library that has objects.
     let ar = if crate::system::in_path("llvm-ar") {
         "llvm-ar"
     } else {
         "ar"
     };
-    for name in &project.lib_order {
-        let lib = &project.libs[name];
-        if !lib.has_objects() {
+    for (name, lib) in &libs {
+        if lib.sources.is_empty() {
             continue;
         }
         let archive = archive_path(opts, name);
@@ -95,26 +234,30 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         }
     }
 
-    // 3. Link executables against the libraries they (transitively) include.
-    for target in targets {
+    // 4. Link executables against the libraries they (transitively) include,
+    //    plus the Qt resources of those libraries.
+    for (target, own) in &programs {
         let exe = exe_path(opts, target);
-        let objects: Vec<PathBuf> = target
+        let used: Vec<&Component> = target.libs.iter().map(|n| &libs[n]).collect();
+        let objects: Vec<PathBuf> = own
             .sources
             .iter()
+            .chain(&own.resources)
+            .chain(used.iter().flat_map(|l| l.resources.iter()))
             .map(|s| object_path(opts, s))
             .collect();
-        let used: Vec<_> = target.libs.iter().map(|n| &project.libs[n]).collect();
-        let archives: Vec<PathBuf> = used
+        let archives: Vec<PathBuf> = target
+            .libs
             .iter()
-            .filter(|l| l.has_objects())
-            .map(|l| archive_path(opts, &l.name))
+            .filter(|n| !libs[*n].sources.is_empty())
+            .map(|n| archive_path(opts, n))
             .collect();
 
-        let any_cpp = target
+        let any_cpp = own
             .sources
             .iter()
-            .any(|s| Lang::of(s) == Some(Lang::Cpp))
-            || used.iter().any(|l| l.has_cpp());
+            .chain(used.iter().flat_map(|l| l.sources.iter()))
+            .any(|s| Lang::of(s) == Some(Lang::Cpp));
         let mut cmd = vec![driver(if any_cpp { Lang::Cpp } else { Lang::C }).to_string()];
         cmd.extend(objects.iter().chain(&archives).map(|p| path_str(p)));
         cmd.extend(target.link_flags.iter().cloned());
@@ -143,16 +286,22 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
     Ok(())
 }
 
+/// One command producing one file: a compilation or a code generator.
 struct Job {
-    src: PathBuf,
-    obj: PathBuf,
+    verb: &'static str,
+    label: String,
+    output: PathBuf,
     cmd: Vec<String>,
+    /// Compiler jobs get colour diagnostics.
+    compiler: bool,
 }
 
-fn compile_all(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
+/// Runs jobs in parallel; stops handing out work after the first failure.
+fn run_jobs(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
     if jobs.is_empty() {
         return Ok(());
     }
+    let compiling = jobs[0].compiler;
     let workers = opts.jobs.clamp(1, jobs.len());
     let queue = Mutex::new(jobs.into_iter());
     let failures = AtomicUsize::new(0);
@@ -162,7 +311,6 @@ fn compile_all(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
         for _ in 0..workers {
             scope.spawn(|| {
                 loop {
-                    // Stop handing out work after the first failure, like make/cargo.
                     if failures.load(Ordering::Relaxed) > 0 {
                         break;
                     }
@@ -170,18 +318,18 @@ fn compile_all(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
                         break;
                     };
 
-                    ui::status("Compiling", &job.src.display().to_string());
+                    ui::status(job.verb, &job.label);
                     if opts.verbose {
                         eprintln!("{}", job.cmd.join(" "));
                     }
-                    if let Some(parent) = job.obj.parent() {
+                    if let Some(parent) = job.output.parent() {
                         let _ = fs::create_dir_all(parent);
                     }
-                    let _ = fs::remove_file(stamp_path(&job.obj));
+                    let _ = fs::remove_file(stamp_path(&job.output));
 
                     let mut command = Command::new(&job.cmd[0]);
                     command.args(&job.cmd[1..]);
-                    if ui::color() {
+                    if job.compiler && ui::color() {
                         command.arg("-fcolor-diagnostics");
                     }
                     match command.output() {
@@ -190,7 +338,7 @@ fn compile_all(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
                             let _ = err.write_all(&out.stdout);
                             let _ = err.write_all(&out.stderr);
                             if out.status.success() {
-                                write_stamp(&job.obj, &job.cmd);
+                                write_stamp(&job.output, &job.cmd);
                             } else {
                                 failures.fetch_add(1, Ordering::Relaxed);
                             }
@@ -208,10 +356,11 @@ fn compile_all(jobs: Vec<Job>, opts: &Options) -> Result<(), String> {
     if let Some(e) = spawn_error.into_inner().unwrap() {
         return Err(e);
     }
+    let what = if compiling { "compile" } else { "be generated" };
     match failures.into_inner() {
         0 => Ok(()),
-        1 => Err("a file failed to compile; fix the errors above".into()),
-        n => Err(format!("{n} files failed to compile; fix the errors above")),
+        1 => Err(format!("a file failed to {what}; fix the errors above")),
+        n => Err(format!("{n} files failed to {what}; fix the errors above")),
     }
 }
 
@@ -255,17 +404,17 @@ fn driver(lang: Lang) -> &'static str {
     }
 }
 
-/// Every source of every library, plus those of `targets`, with the system
-/// flags of the component it belongs to.
-fn units<'a>(project: &'a Project, targets: &[&'a Target]) -> Vec<(&'a PathBuf, &'a [String])> {
-    let libs = project.lib_order.iter().map(|n| &project.libs[n]);
-    libs.flat_map(|l| l.sources.iter().map(|s| (s, l.cflags.as_slice())))
-        .chain(
-            targets
-                .iter()
-                .flat_map(|t| t.sources.iter().map(|s| (s, t.cflags.as_slice()))),
-        )
-        .collect()
+/// `-I` flags every compilation gets: `src/libs` and each library folder, so
+/// `#include "mylib/header.hpp"` and `#include "header.hpp"` both work.
+fn base_includes(project: &Project) -> Vec<String> {
+    let mut out = vec![format!("-I{}", crate::project::LIBS_DIR)];
+    out.extend(
+        project
+            .libs
+            .values()
+            .map(|l| format!("-I{}", l.dir.display())),
+    );
+    out
 }
 
 fn compile_command(
@@ -290,14 +439,7 @@ fn compile_command(
     } else {
         cmd.extend(["-O0".into(), "-g".into()]);
     }
-    // `#include "mylib/header.hpp"` and `#include "header.hpp"` both work.
-    cmd.push(format!("-I{}", crate::project::LIBS_DIR));
-    cmd.extend(
-        project
-            .libs
-            .values()
-            .map(|l| format!("-I{}", l.dir.display())),
-    );
+    cmd.extend(base_includes(project));
     for dir in &project.system_includes {
         cmd.extend(["-isystem".into(), path_str(dir)]);
     }
@@ -313,12 +455,35 @@ fn compile_command(
 }
 
 /// `build/compile_commands.json`, picked up by clangd, VS Code and CLion.
-fn write_compile_commands(project: &Project, opts: &Options) -> Result<(), String> {
+fn write_compile_commands(
+    project: &Project,
+    opts: &Options,
+    libs: &BTreeMap<String, Component>,
+) -> Result<(), String> {
     let directory = json_str(&path_str(&project.root));
-    let all: Vec<&Target> = project.bins.iter().chain(&project.tests).collect();
+    let targets: Vec<Component> = project
+        .bins
+        .iter()
+        .chain(&project.tests)
+        .map(|t| target_component(project, opts, t))
+        .collect();
+    // The project's own files, with their component's flags (generated files
+    // are left out: editors do not open them).
+    let own = |c: &Component| -> Vec<PathBuf> {
+        c.sources
+            .iter()
+            .filter(|s| s.starts_with("src"))
+            .cloned()
+            .collect()
+    };
+    let units: Vec<(PathBuf, &[String])> = libs
+        .values()
+        .chain(&targets)
+        .flat_map(|c| own(c).into_iter().map(move |s| (s, c.cflags.as_slice())))
+        .collect();
 
-    let entries: Vec<String> = units(project, &all)
-        .into_iter()
+    let entries: Vec<String> = units
+        .iter()
         .map(|(src, cflags)| {
             let obj = object_path(opts, src);
             let args: Vec<String> = compile_command(project, opts, src, &obj, cflags)
@@ -359,9 +524,14 @@ fn json_str(s: &str) -> String {
     out
 }
 
-/// `src/libs/foo/a.cpp` -> `build/debug/obj/libs/foo/a.cpp.o`
+/// `src/libs/foo/a.cpp` -> `build/debug/obj/libs/foo/a.cpp.o`, and generated
+/// `build/debug/gen/libs/foo/moc_a.cpp` -> `build/debug/obj/gen/libs/foo/moc_a.cpp.o`
 fn object_path(opts: &Options, src: &Path) -> PathBuf {
-    let rel = src.strip_prefix("src").unwrap_or(src);
+    let dir = opts.dir();
+    let rel = src
+        .strip_prefix("src")
+        .or_else(|_| src.strip_prefix(&dir))
+        .unwrap_or(src);
     with_suffix(&opts.dir().join("obj").join(rel), ".o")
 }
 

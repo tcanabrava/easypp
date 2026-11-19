@@ -35,7 +35,7 @@ pub enum SysDep {
 
 /// Bump whenever the header-to-library rules change, so cached answers from
 /// older rules are thrown away (it is part of the fingerprint).
-const RULES_VERSION: u32 = 2; // 2: <prefix/module...> -> lib<prefix>_<module>
+const RULES_VERSION: u32 = 4; // 2: lib<prefix>_<module>; 3: Qt modules; 4: Qt 5 dropped
 
 /// What `includes()` reports for a `#pragma omp` line.
 pub const OPENMP_PRAGMA: &str = "#pragma omp";
@@ -248,7 +248,9 @@ impl System {
     ) -> System {
         let mut by_name = HashMap::new();
         for (i, package) in snapshot.packages.iter().enumerate() {
-            by_name.entry(normalize(&package.name)).or_insert(i);
+            if !crate::qt::is_unsupported_package(&package.name) {
+                by_name.entry(normalize(&package.name)).or_insert(i);
+            }
         }
         System {
             default_lib_dirs: snapshot.default_lib_dirs.iter().cloned().collect(),
@@ -288,6 +290,9 @@ impl System {
         if include == "omp.h" || include == OPENMP_PRAGMA {
             return Some(SysDep::OpenMp);
         }
+        if let Some(dep) = self.qt_module(include) {
+            return Some(dep);
+        }
         if let Some(name) = libc_extra(include) {
             return Some(SysDep::Lib {
                 name: name.into(),
@@ -317,6 +322,7 @@ impl System {
         self.snapshot
             .packages
             .iter()
+            .filter(|p| !crate::qt::is_unsupported_package(&p.name))
             .flat_map(|p| p.include_dirs.iter().map(move |d| (p, d)))
             .filter(|(_, d)| d.join(include).is_file())
             .min_by(|(pa, da), (pb, db)| {
@@ -328,6 +334,19 @@ impl System {
                     .then(pb.name.cmp(&pa.name))
             })
             .map(|(p, _)| SysDep::Pkg(p.name.clone()))
+    }
+
+    /// `<QtWidgets/QPushButton>` or `<QtWidgets>` -> Qt6Widgets.
+    /// Every Qt package lists the shared `include/qt6` folder, so the generic
+    /// rules cannot tell the modules apart.
+    fn qt_module(&self, include: &str) -> Option<SysDep> {
+        let module = include.split('/').next()?;
+        let rest = module.strip_prefix("Qt")?;
+        if !rest.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return None;
+        }
+        let i = *self.by_name.get(&normalize(&format!("Qt6{rest}")))?;
+        Some(SysDep::Pkg(self.snapshot.packages[i].name.clone()))
     }
 
     fn package_named_like(&self, include: &str) -> Option<SysDep> {
@@ -376,6 +395,10 @@ impl System {
                 SysDep::OpenMp => push_unique(&mut out, "-fopenmp".into()),
                 SysDep::Lib { .. } => {}
             }
+        }
+        // Qt is built with QT_REDUCE_RELOCATIONS: code using it must be -fPIC.
+        if deps.iter().any(crate::qt::is_qt) {
+            push_unique(&mut out, "-fPIC".into());
         }
         out
     }

@@ -12,6 +12,7 @@
 //! ```
 
 use crate::cache::{Cache, IncludeIndex};
+use crate::qt::{self, QtFiles, QtTools};
 use crate::system::{OPENMP_PRAGMA, SysDep, System};
 use crate::ui;
 use std::cell::RefCell;
@@ -49,16 +50,16 @@ pub struct Library {
     /// Compiler flags for the system libraries used by this library and by
     /// the internal libraries it uses (their headers may include them).
     pub cflags: Vec<String>,
+    /// Every internal library this one uses, directly or not.
+    pub closure: Vec<String>,
+    /// Files for moc, uic and rcc.
+    pub qt: QtFiles,
 }
 
 impl Library {
     /// Header-only libraries produce no archive.
     pub fn has_objects(&self) -> bool {
         !self.sources.is_empty()
-    }
-
-    pub fn has_cpp(&self) -> bool {
-        self.sources.iter().any(|s| Lang::of(s) == Some(Lang::Cpp))
     }
 }
 
@@ -81,6 +82,8 @@ pub struct Target {
     /// Compiler and linker flags for `system`.
     pub cflags: Vec<String>,
     pub link_flags: Vec<String>,
+    /// Files for moc, uic and rcc.
+    pub qt: QtFiles,
 }
 
 #[derive(Debug)]
@@ -93,6 +96,8 @@ pub struct Project {
     pub tests: Vec<Target>,
     /// Third-party include folders, passed with `-isystem`.
     pub system_includes: Vec<PathBuf>,
+    /// moc/uic/rcc, when some component needs them.
+    pub qt_tools: Option<QtTools>,
 }
 
 pub const LIBS_DIR: &str = "src/libs";
@@ -146,6 +151,8 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
                 deps: BTreeSet::new(),
                 system: BTreeSet::new(),
                 cflags: Vec::new(),
+                closure: Vec::new(),
+                qt: QtFiles::default(),
             },
         );
     }
@@ -171,24 +178,33 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
     };
 
     for lib in libs.values_mut() {
-        let (deps, external) = resolver.scan(walk(&lib.dir), Some(&lib.name));
-        lib.deps = deps;
-        lib.system = external.iter().filter_map(|i| system.resolve(i)).collect();
+        let files = walk(&lib.dir);
+        let scan = resolver.scan(files.clone(), Some(&lib.name));
+        lib.deps = scan.libs;
+        lib.system = scan
+            .external
+            .iter()
+            .filter_map(|i| system.resolve(i))
+            .collect();
+        lib.qt = QtFiles::from_files(&files, scan.moc);
     }
     let lib_order = topo_order(&libs)?;
 
-    let lib_cflags: Vec<(String, Vec<String>)> = libs
+    let lib_cflags: Vec<(String, Vec<String>, Vec<String>)> = libs
         .values()
         .map(|lib| {
+            let closure = link_order(&lib.deps, &libs, &lib_order);
             let mut used = lib.system.clone();
-            for dep in link_order(&lib.deps, &libs, &lib_order) {
-                used.extend(libs[&dep].system.iter().cloned());
+            for dep in &closure {
+                used.extend(libs[dep].system.iter().cloned());
             }
-            (lib.name.clone(), system.compile_flags(&used))
+            (lib.name.clone(), system.compile_flags(&used), closure)
         })
         .collect();
-    for (name, cflags) in lib_cflags {
-        libs.get_mut(&name).unwrap().cflags = cflags;
+    for (name, cflags, closure) in lib_cflags {
+        let lib = libs.get_mut(&name).unwrap();
+        lib.cflags = cflags;
+        lib.closure = closure;
     }
 
     let ctx = Context {
@@ -206,6 +222,29 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         ui::warn(&format!("could not update the build cache: {e}"));
     }
 
+    // Qt tools, only when something needs code generation.
+    let needs_qt: Vec<(&str, &QtFiles)> = libs
+        .values()
+        .map(|l| (l.name.as_str(), &l.qt))
+        .chain(bins.iter().chain(&tests).map(|t| (t.name.as_str(), &t.qt)))
+        .filter(|(_, q)| !q.is_empty())
+        .collect();
+    let qt_tools = match needs_qt.first() {
+        None => None,
+        Some((name, _)) => {
+            let deps = libs
+                .values()
+                .flat_map(|l| l.system.iter())
+                .chain(bins.iter().chain(&tests).flat_map(|t| t.system.iter()));
+            Some(qt::find_tools(deps).ok_or_else(|| {
+                format!(
+                    "'{name}' needs moc/uic/rcc (Q_OBJECT, .ui or .qrc files), but no Qt \
+                     installation was found through its #includes and pkg-config"
+                )
+            })?)
+        }
+    };
+
     Ok(Project {
         root: root.to_path_buf(),
         libs,
@@ -213,6 +252,7 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         bins,
         tests,
         system_includes,
+        qt_tools,
     })
 }
 
@@ -257,11 +297,13 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
             ));
         }
 
-        let (direct, external) = ctx.resolver.scan(files, None);
-        let libs = link_order(&direct, ctx.libs, ctx.lib_order);
+        let scan = ctx.resolver.scan(files.clone(), None);
+        let libs = link_order(&scan.libs, ctx.libs, ctx.lib_order);
+        // A folder target owns its .ui/.qrc files; a single-file target has none.
+        let qt = QtFiles::from_files(if entry.is_dir() { &files } else { &[] }, scan.moc);
 
         let mut system: Vec<SysDep> = Vec::new();
-        let own = external.iter().filter_map(|i| ctx.system.resolve(i));
+        let own = scan.external.iter().filter_map(|i| ctx.system.resolve(i));
         let from_libs = libs.iter().flat_map(|l| ctx.libs[l].system.iter().cloned());
         for dep in own.chain(from_libs) {
             if !system.contains(&dep) {
@@ -279,6 +321,7 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
             system,
             cflags,
             link_flags,
+            qt,
         });
     }
     Ok(targets)
@@ -407,25 +450,30 @@ impl Resolver {
     /// not found in the project (left for the system). Follows includes
     /// through non-library headers, e.g. one next to an executable, or a
     /// third-party header.
-    fn scan(
-        &self,
-        files: Vec<PathBuf>,
-        own_lib: Option<&str>,
-    ) -> (BTreeSet<String>, BTreeSet<String>) {
+    fn scan(&self, files: Vec<PathBuf>, own_lib: Option<&str>) -> Scan {
         let mut found = BTreeSet::new();
         let mut external = BTreeSet::new();
         let mut visited: HashSet<PathBuf> = HashSet::new();
         let mut work: Vec<PathBuf> = files
-            .into_iter()
-            .map(|f| fs::canonicalize(&f).unwrap_or(f))
+            .iter()
+            .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
             .collect();
         visited.extend(work.iter().cloned());
+        // The component's own files, to report which of them need moc.
+        let own: HashMap<PathBuf, PathBuf> = work.iter().cloned().zip(files).collect();
+        let mut moc = Vec::new();
 
         while let Some(file) = work.pop() {
             let file_includes = self.index.borrow_mut().includes(&file, |text| {
                 includes(text).into_iter().map(String::from).collect()
             });
             for include in &file_includes {
+                if include == qt::MOC_MARKER {
+                    if let Some(original) = own.get(&file) {
+                        moc.push(original.clone());
+                    }
+                    continue;
+                }
                 let Some(header) = self.resolve(&file, include) else {
                     external.insert(include.to_string());
                     continue;
@@ -443,17 +491,38 @@ impl Resolver {
                 }
             }
         }
-        (found, external)
+        moc.sort();
+        Scan {
+            libs: found,
+            external,
+            moc,
+        }
     }
 }
 
+/// What scanning a component's files found.
+struct Scan {
+    /// Internal libraries it includes from.
+    libs: BTreeSet<String>,
+    /// Includes not found in the project, for the system to resolve.
+    external: BTreeSet<String>,
+    /// Its own files that need moc.
+    moc: Vec<PathBuf>,
+}
+
 /// Extracts the targets of `#include "..."` and `#include <...>` lines. A
-/// `#pragma omp` line is reported as [`OPENMP_PRAGMA`], once per file.
+/// `#pragma omp` line is reported as [`OPENMP_PRAGMA`] and a Q_OBJECT-style
+/// line as [`qt::MOC_MARKER`], once per file each.
 fn includes(text: &str) -> Vec<&str> {
     let mut openmp = false;
+    let mut moc = false;
     let mut out: Vec<&str> = text
         .lines()
         .filter_map(|line| {
+            if !moc && qt::needs_moc(line) {
+                moc = true;
+                return None;
+            }
             let directive = line.trim_start().strip_prefix('#')?.trim_start();
             if let Some(pragma) = directive.strip_prefix("pragma")
                 && pragma.trim_start().starts_with("omp")
@@ -473,6 +542,9 @@ fn includes(text: &str) -> Vec<&str> {
         .collect();
     if openmp {
         out.push(OPENMP_PRAGMA);
+    }
+    if moc {
+        out.push(qt::MOC_MARKER);
     }
     out
 }
@@ -524,6 +596,12 @@ mod tests {
             "#include <cstdio>\n  #pragma omp parallel for\n#pragma once\n# pragma  omp simd\n";
         assert_eq!(includes(text), vec!["cstdio", OPENMP_PRAGMA]);
         assert_eq!(includes("#pragma once\n"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn reports_qt_meta_objects() {
+        let text = "#include <QObject>\nclass A : public QObject {\n    Q_OBJECT\n};\n";
+        assert_eq!(includes(text), vec!["QObject", qt::MOC_MARKER]);
     }
 
     #[test]
