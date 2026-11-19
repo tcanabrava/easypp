@@ -1,0 +1,178 @@
+canabrava2026:
+  type: report
+  title: "Growing Language, Shrinking Classroom: C++ Education in European Universities"
+  author: ["Canabrava, Tomaz"]
+  date: 2026-11
+  note: Draft
+
+jetbrains2025:
+  type: web
+  title: The State of C++ 2025
+  author: JetBrains
+  date: 2025
+  url:
+    value: https://lp.jetbrains.com/the-state-of-cpp-2025/
+    date: 2026-11-19
+
+codeblocks:
+  type: web
+  title: Code::Blocks binary releases (25.03)
+  author: Code::Blocks
+  date: 2025-03
+  url:
+    value: https://codeblocks.org/downloads/binaries/
+    date: 2026-11-19
+
+mimuw-pk:
+  type: web
+  title: "Programowanie komputerowe, Zajęcia 1"
+  author: "University of Warsaw (course for the Faculty of Economic Sciences)"
+  date: 2024
+  url:
+    value: https://mimuw.edu.pl/~ziemians/pk2024/PK24-01.pdf
+    date: 2026-11-19
+
+kielce-po1:
+  type: web
+  title: "Programowanie obiektowe 1, Instrukcja 4: Instalacja biblioteki klas WxWidgets"
+  author: Kielce University of Technology
+  date: 2026
+  url:
+    value: https://achilles.tu.kielce.pl/portal/Members/596d88a5187b42e2bad090bb66227a25/pub/po1/2026/instrukcja-nr-4.pdf
+    date: 2026-11-19
+
+wroclaw-cpp:
+  type: web
+  title: "Kurs języka C++: organizacja zajęć"
+  author: ["Rzechonek, Paweł"]
+  date: 2024
+  url:
+    value: https://ii.uni.wroc.pl/~prz/2024lato/cpp/slajdy/cpp0-organizacja.pdf
+    date: 2026-11-19
+
+isocpp-get-started:
+  type: web
+  title: Get Started!
+  author: Standard C++ Foundation
+  url:
+    value: https://isocpp.org/get-started
+    date: 2026-11-19
+
+rust-book:
+  type: book
+  title: The Rust Programming Language
+  author: ["Klabnik, Steve", "Nichols, Carol", "Krycho, Chris"]
+  url:
+    value: https://doc.rust-lang.org/book/
+    date: 2026-11-19
+
+cargo-targets:
+  type: web
+  title: "The Cargo Book: Cargo Targets (target auto-discovery)"
+  author: The Rust Project
+  url:
+    value: https://doc.rust-lang.org/cargo/reference/cargo-targets.html
+    date: 2026-11-19
+
+cmake-docs:
+  type: web
+  title: CMake Reference Documentation
+  author: Kitware
+  url:
+    value: https://cmake.org/cmake/help/latest/
+    date: 2026-11-19
+
+meson-options:
+  type: web
+  title: "Meson: Built-in options"
+  author: The Meson development team
+  url:
+    value: https://mesonbuild.com/Builtin-options.html
+    date: 2026-11-19
+
+meson-commands:
+  type: web
+  title: "Meson: Commands"
+  author: The Meson development team
+  url:
+    value: https://mesonbuild.com/Commands.html
+    date: 2026-11-19
+
+bazel-cc:
+  type: web
+  title: "Bazel: C / C++ rules"
+  author: Google
+  url:
+    value: https://bazel.build/reference/be/c-cpp
+    date: 2026-11-19
+
+xmake:
+  type: web
+  title: "xmake: a cross-platform build utility based on Lua"
+  author: ["Wang, Ruki"]
+  url:
+    value: https://xmake.io/
+    date: 2026-11-19
+
+build2:
+  type: web
+  title: "build2: C++ Build Toolchain"
+  author: Code Synthesis
+  url:
+    value: https://build2.org/
+    date: 2026-11-19
+
+vcpkg:
+  type: web
+  title: vcpkg documentation
+  author: Microsoft
+  url:
+    value: https://learn.microsoft.com/vcpkg/
+    date: 2026-11-19
+
+conan:
+  type: web
+  title: Conan C/C++ package manager documentation
+  author: JFrog
+  url:
+    value: https://docs.conan.io/
+    date: 2026-11-19
+
+pkg-config:
+  type: web
+  title: pkg-config
+  author: freedesktop.org
+  url:
+    value: https://www.freedesktop.org/wiki/Software/pkg-config/
+    date: 2026-11-19
+
+clang-cdb:
+  type: web
+  title: JSON Compilation Database Format Specification
+  author: The LLVM Project
+  url:
+    value: https://clang.llvm.org/docs/JSONCompilationDatabase.html
+    date: 2026-11-19
+
+clang16-notes:
+  type: web
+  title: Clang 16.0.0 Release Notes
+  author: The LLVM Project
+  date: 2023-03
+  url:
+    value: https://releases.llvm.org/16.0.0/tools/clang/docs/ReleaseNotes.html
+    date: 2026-11-19
+
+sweller1988:
+  type: article
+  title: "Cognitive Load During Problem Solving: Effects on Learning"
+  author: ["Sweller, John"]
+  date: 1988
+  page-range: 257-285
+  serial-number:
+    doi: 10.1207/s15516709cog1202_4
+  parent:
+    type: periodical
+    title: Cognitive Science
+    volume: 12
+    issue: 2
