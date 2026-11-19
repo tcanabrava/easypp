@@ -35,6 +35,7 @@ Options:
   -v, --verbose         Print every compiler command
       --no-cache        Ignore build/easypp.db (detect and scan everything)
   -h, --help            Show this help
+  -V, --version         Show the version
 
 Layout:
   src/libs/<name>/      static library <name>
@@ -76,6 +77,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
             "-v" | "--verbose" => opts.verbose = true,
             "--no-cache" => opts.cache = false,
             "-h" | "--help" => command = Some("help".to_string()),
+            "-V" | "--version" => command = Some("version".to_string()),
             "-j" | "--jobs" => {
                 let value = it.next().ok_or("-j needs a number")?;
                 opts.jobs = parse_jobs(&value)?;
@@ -119,6 +121,10 @@ fn run() -> Result<ExitCode, String> {
     match cli.command.as_str() {
         "help" => {
             println!("{USAGE}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        "version" => {
+            println!("easypp {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
         "new" => {
