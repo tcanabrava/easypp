@@ -12,6 +12,7 @@
 //! ```
 
 use crate::cache::{Cache, IncludeIndex};
+use crate::cond::Conditions;
 use crate::qt::{self, QtFiles, QtTools};
 use crate::system::{OPENMP_PRAGMA, SysDep, System};
 use crate::ui;
@@ -492,6 +493,18 @@ impl Resolver {
                     }
                     continue;
                 }
+                if include == MACRO_INCLUDE {
+                    // Only the project's own code: third-party headers may do
+                    // this on purpose, and are not ours to fix.
+                    let shown = self.display(&file);
+                    if !shown.starts_with("src/thirdparty") {
+                        ui::warn(&format!(
+                            "{shown}: easypp cannot follow `#include` with a macro; if it \
+                             names a library header, include that header directly"
+                        ));
+                    }
+                    continue;
+                }
                 let Some(header) = self.resolve(&file, include) else {
                     if let Some(lib) = self.library_with_file(include) {
                         ui::warn(&format!(
@@ -535,41 +548,64 @@ struct Scan {
     moc: Vec<PathBuf>,
 }
 
-/// Extracts the targets of `#include "..."` and `#include <...>` lines. A
-/// `#pragma omp` line is reported as [`OPENMP_PRAGMA`] and a Q_OBJECT-style
-/// line as [`qt::MOC_MARKER`], once per file each.
+/// What `includes()` reports for `#include SOME_MACRO`, which cannot be followed.
+pub const MACRO_INCLUDE: &str = "#include macro";
+
+/// Extracts the targets of `#include "..."` and `#include <...>` lines,
+/// skipping blocks that are certainly off on this platform (`#ifdef _WIN32`,
+/// `#if 0`; see [`crate::cond`]). Also reports, once per file each: a
+/// `#pragma omp` line as [`OPENMP_PRAGMA`], a Q_OBJECT-style line as
+/// [`qt::MOC_MARKER`], and `#include MACRO` as [`MACRO_INCLUDE`].
 fn includes(text: &str) -> Vec<&str> {
-    let mut openmp = false;
-    let mut moc = false;
-    let mut out: Vec<&str> = text
-        .lines()
-        .filter_map(|line| {
-            if !moc && qt::needs_moc(line) {
-                moc = true;
-                return None;
+    let mut conditions = Conditions::default();
+    let (mut openmp, mut moc, mut macro_include) = (false, false, false);
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let directive = line.trim_start().strip_prefix('#').map(str::trim_start);
+        if let Some(directive) = directive
+            && conditions.directive(directive)
+        {
+            continue;
+        }
+        if !conditions.active() {
+            continue;
+        }
+        let Some(directive) = directive else {
+            moc = moc || qt::needs_moc(line);
+            continue;
+        };
+        if let Some(pragma) = directive.strip_prefix("pragma")
+            && pragma.trim_start().starts_with("omp")
+        {
+            openmp = true;
+            continue;
+        }
+        let Some(rest) = directive.strip_prefix("include") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let close = match rest.chars().next() {
+            Some('"') => '"',
+            Some('<') => '>',
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                macro_include = true;
+                continue;
             }
-            let directive = line.trim_start().strip_prefix('#')?.trim_start();
-            if let Some(pragma) = directive.strip_prefix("pragma")
-                && pragma.trim_start().starts_with("omp")
-            {
-                openmp = true;
-                return None;
-            }
-            let rest = directive.strip_prefix("include")?.trim_start();
-            let close = match rest.chars().next()? {
-                '"' => '"',
-                '<' => '>',
-                _ => return None,
-            };
-            let rest = &rest[1..];
-            Some(&rest[..rest.find(close)?])
-        })
-        .collect();
+            _ => continue,
+        };
+        let rest = &rest[1..];
+        if let Some(end) = rest.find(close) {
+            out.push(&rest[..end]);
+        }
+    }
     if openmp {
         out.push(OPENMP_PRAGMA);
     }
     if moc {
         out.push(qt::MOC_MARKER);
+    }
+    if macro_include {
+        out.push(MACRO_INCLUDE);
     }
     out
 }
@@ -612,7 +648,7 @@ mod tests {
     #[test]
     fn parses_include_lines() {
         let text = "#include <vector>\n  #  include \"a/b.hpp\" // x\n#define X\n#include MACRO\n";
-        assert_eq!(includes(text), vec!["vector", "a/b.hpp"]);
+        assert_eq!(includes(text), vec!["vector", "a/b.hpp", MACRO_INCLUDE]);
     }
 
     #[test]
@@ -621,6 +657,15 @@ mod tests {
             "#include <cstdio>\n  #pragma omp parallel for\n#pragma once\n# pragma  omp simd\n";
         assert_eq!(includes(text), vec!["cstdio", OPENMP_PRAGMA]);
         assert_eq!(includes("#pragma once\n"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn skips_blocks_for_other_platforms() {
+        let text = "#ifndef GUARD_H\n#define GUARD_H\n#ifdef _WIN32\n#include <windows.h>\n\
+                    #elif defined(__APPLE__)\n#include <mach/mach.h>\n#else\n#include <unistd.h>\n\
+                    #endif\n#if 0\n#include \"old.hpp\"\n#endif\n#if defined(HAVE_X)\n#include <x.h>\n\
+                    #endif\n#include CONFIG_HEADER\n#endif\n";
+        assert_eq!(includes(text), vec!["unistd.h", "x.h", MACRO_INCLUDE]);
     }
 
     #[test]
