@@ -78,7 +78,7 @@ easypp clean
   the component and of everything that uses it. The tools are found through
   pkg-config (`/usr/lib/qt6/moc` and so on), not PATH.
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
-  `clang++ -std=c++20`. Executables that contain any C++ are linked with clang++.
+  `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.
 - **Builds are incremental and parallel**: clang depfiles track headers,
   and anything whose flags changed is rebuilt.

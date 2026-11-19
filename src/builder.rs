@@ -25,7 +25,7 @@ pub const COMPILE_DB: &str = "compile_commands.json";
 
 const WARNINGS: [&str; 3] = ["-Wall", "-pedantic", "-Werror"];
 const C_STD: &str = "-std=c17";
-const CPP_STD: &str = "-std=c++20";
+const CPP_STD: &str = "-std=c++23";
 
 pub struct Options {
     pub release: bool,
