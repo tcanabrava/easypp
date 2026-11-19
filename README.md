@@ -47,7 +47,9 @@ easypp clean
      `/usr/include/SDL2`, `<gtk/gtk.h>` in `/usr/include/gtk-4.0`. If several
      packages match, it prefers the base, newest-looking one (gtk4).
   3. A `lib<name>.so`/`.a` in the compiler's library folders or `/usr/local/lib`,
-     `/usr/lib64`, ...: `<pthread.h>` → `-lpthread`. Libraries outside the
+     `/usr/lib64`, ...: `<pthread.h>` → `-lpthread`. For `<prefix/module...>`
+     it tries `lib<prefix>_<module>` first, which covers compiled Boost
+     libraries: `<boost/json.hpp>` → `-lboost_json`. Libraries outside the
      linker's default folders get `-L` and an rpath.
   4. `<math.h>` → `-lm`.
   5. OpenMP: `<omp.h>` or any `#pragma omp` line adds `-fopenmp` to compiling

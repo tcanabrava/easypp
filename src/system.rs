@@ -33,6 +33,10 @@ pub enum SysDep {
     OpenMp,
 }
 
+/// Bump whenever the header-to-library rules change, so cached answers from
+/// older rules are thrown away (it is part of the fingerprint).
+const RULES_VERSION: u32 = 2; // 2: <prefix/module...> -> lib<prefix>_<module>
+
 /// What `includes()` reports for a `#pragma omp` line.
 pub const OPENMP_PRAGMA: &str = "#pragma omp";
 
@@ -171,7 +175,7 @@ impl Snapshot {
     /// or removing a library or package changes at least one of them.
     pub fn fingerprint(&self) -> String {
         let mut parts = vec![
-            format!("easypp {}", env!("CARGO_PKG_VERSION")),
+            format!("easypp {} rules {RULES_VERSION}", env!("CARGO_PKG_VERSION")),
             format!("PKG_CONFIG_PATH={:?}", std::env::var_os("PKG_CONFIG_PATH")),
         ];
         for program in ["clang", "clang++", "pkg-config"] {
@@ -337,7 +341,11 @@ impl System {
     }
 
     fn library_file_named_like(&self, include: &str) -> Option<SysDep> {
-        for name in candidates(include) {
+        // `<boost/json.hpp>` -> libboost_json: try the module library first.
+        let names = module_library(include)
+            .into_iter()
+            .chain(candidates(include));
+        for name in names {
             for dir in &self.snapshot.lib_dirs {
                 let found = ["so", "a"]
                     .iter()
@@ -454,6 +462,16 @@ fn candidates(include: &str) -> Vec<String> {
     }
     out.dedup();
     out
+}
+
+/// `prefix_module` for `<prefix/module.hpp>` or `<prefix/module/...>`, the
+/// naming used by Boost (`libboost_json`) and Abseil (`libabsl_strings`).
+fn module_library(include: &str) -> Option<String> {
+    let mut parts = Path::new(include).components();
+    let prefix = parts.next()?.as_os_str().to_str()?;
+    let second = Path::new(parts.next()?.as_os_str());
+    let module = second.file_stem()?.to_str()?;
+    Some(format!("{prefix}_{module}"))
 }
 
 /// `gtk+-3.0` -> `gtk30`, `SDL2` -> `sdl2`.
@@ -622,6 +640,15 @@ mod tests {
         assert_eq!(candidates("zlib.h"), vec!["zlib"]);
         assert_eq!(candidates("fmt/fmt.h"), vec!["fmt"]);
         assert_eq!(normalize("gtk+-3.0"), "gtk30");
+        assert_eq!(
+            module_library("boost/json.hpp").as_deref(),
+            Some("boost_json")
+        );
+        assert_eq!(
+            module_library("boost/program_options/variables_map.hpp").as_deref(),
+            Some("boost_program_options")
+        );
+        assert_eq!(module_library("zlib.h"), None);
     }
 
     #[test]
