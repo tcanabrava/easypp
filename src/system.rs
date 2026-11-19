@@ -35,7 +35,7 @@ pub enum SysDep {
 
 /// Bump whenever the header-to-library rules change, so cached answers from
 /// older rules are thrown away (it is part of the fingerprint).
-const RULES_VERSION: u32 = 4; // 2: lib<prefix>_<module>; 3: Qt modules; 4: Qt 5 dropped
+const RULES_VERSION: u32 = 6; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
 
 /// What `includes()` reports for a `#pragma omp` line.
 pub const OPENMP_PRAGMA: &str = "#pragma omp";
@@ -316,9 +316,11 @@ impl System {
         }
 
         // Elsewhere: the package whose own include folder holds it. When several
-        // do (gtk+-2.0, gtk+-3.0, gtk4 all have <gtk/gtk.h>), prefer the most
-        // specific folder, then the package with the fewest folders, then the
-        // shortest name (gtk4 over gtk4-x11), then the newest-looking name.
+        // do (gtk+-2.0, gtk+-3.0 and gtk4 all have <gtk/gtk.h>), always take the
+        // latest version: prefer the most specific (deepest) folder, then the
+        // highest version in the folder's name (gtk-4.0 over gtk-3.0, SDL2 over
+        // SDL), then the package with the fewest folders, then the shortest
+        // name (gtk4 over gtk4-x11, which share gtk-4.0).
         self.snapshot
             .packages
             .iter()
@@ -326,12 +328,13 @@ impl System {
             .flat_map(|p| p.include_dirs.iter().map(move |d| (p, d)))
             .filter(|(_, d)| d.join(include).is_file())
             .min_by(|(pa, da), (pb, db)| {
-                let len = |d: &PathBuf| d.as_os_str().len();
-                len(db)
-                    .cmp(&len(da))
+                let depth = |d: &PathBuf| d.components().count();
+                depth(db)
+                    .cmp(&depth(da))
+                    .then(folder_version(db).cmp(&folder_version(da)))
                     .then(pa.include_dirs.len().cmp(&pb.include_dirs.len()))
                     .then(pa.name.len().cmp(&pb.name.len()))
-                    .then(pb.name.cmp(&pa.name))
+                    .then(pa.name.cmp(&pb.name))
             })
             .map(|(p, _)| SysDep::Pkg(p.name.clone()))
     }
@@ -495,6 +498,29 @@ fn module_library(include: &str) -> Option<String> {
     let second = Path::new(parts.next()?.as_os_str());
     let module = second.file_stem()?.to_str()?;
     Some(format!("{prefix}_{module}"))
+}
+
+/// The version in an include folder's name: `/usr/include/gtk-4.0` -> [4, 0],
+/// `glibmm-2.68` -> [2, 68], `SDL2` -> [2], `SDL` -> []. (Package names are
+/// not reliable for this: `gdk-x11-3.0` would read as version 11.)
+fn folder_version(dir: &Path) -> Vec<u32> {
+    dir.file_name()
+        .map_or_else(Vec::new, |name| version(&name.to_string_lossy()))
+}
+
+/// The first number in a name, as a version: `gtk-3.0` -> [3, 0].
+fn version(name: &str) -> Vec<u32> {
+    let Some(start) = name.find(|c: char| c.is_ascii_digit()) else {
+        return Vec::new();
+    };
+    let rest = &name[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(rest.len());
+    rest[..end]
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
 
 /// `gtk+-3.0` -> `gtk30`, `SDL2` -> `sdl2`.
@@ -672,6 +698,54 @@ mod tests {
             Some("boost_program_options")
         );
         assert_eq!(module_library("zlib.h"), None);
+    }
+
+    #[test]
+    fn reads_versions_from_folder_names() {
+        assert_eq!(
+            folder_version(Path::new("/usr/include/gtk-3.0")),
+            vec![3, 0]
+        );
+        assert_eq!(folder_version(Path::new("/usr/include/SDL2")), vec![2]);
+        assert_eq!(
+            folder_version(Path::new("/usr/include/SDL")),
+            Vec::<u32>::new()
+        );
+        assert!(folder_version(Path::new("glibmm-2.68")) > folder_version(Path::new("glibmm-2.4")));
+    }
+
+    #[test]
+    fn picks_the_latest_version_of_a_header() {
+        // foo-4.0 has more include folders, which used to make foo-3.0 win.
+        let root = std::env::temp_dir().join(format!("easypp-latest-{}", std::process::id()));
+        for v in ["foo-3.0", "foo-4.0", "extra"] {
+            fs::create_dir_all(root.join(v).join("foo")).unwrap();
+            fs::write(root.join(v).join("foo/foo.h"), "").unwrap();
+        }
+        let package = |name: &str, dirs: &[&str]| Package {
+            name: name.into(),
+            include_dirs: dirs.iter().map(|d| root.join(d)).collect(),
+            cflags: vec![],
+            libs: vec![],
+        };
+        let snapshot = Snapshot {
+            include_dirs: vec![],
+            builtin_dirs: vec![],
+            lib_dirs: vec![],
+            default_lib_dirs: vec![],
+            pc_dirs: vec![],
+            packages: vec![
+                package("foo-3.0", &["foo-3.0"]),
+                package("foo-4.0", &["foo-4.0", "extra"]),
+            ],
+            pkg_config: false,
+        };
+        let system = System::new(snapshot, HashMap::new(), HashMap::new());
+        assert_eq!(
+            system.resolve("foo/foo.h"),
+            Some(SysDep::Pkg("foo-4.0".into()))
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
