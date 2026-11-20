@@ -21,6 +21,7 @@ project_root/
 easypp new hello && cd hello
 easypp run                # build and run (pick one with `easypp run <name>`)
 easypp test               # build and run src/tests: in parallel, 60 s limit each
+easypp debug [name]       # build and start a program or test under gdb/lldb
 easypp build --release    # -O2 -DNDEBUG instead of -O0 -g
 easypp info               # what was discovered, and what links to what
 easypp clean

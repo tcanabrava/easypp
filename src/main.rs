@@ -26,6 +26,7 @@ Commands:
   init                  Create the project layout in the current folder
   build                 Build all libraries and executables
   run [name] [-- args]  Build and run an executable from src/bin
+  debug [name] [-- args] Build and start a program or test under gdb/lldb
   test [filter]         Build and run the programs in src/tests
   info                  Show what was discovered and what links to what
   watch                 Keep compile_commands.json (and Qt's generated files)
@@ -160,7 +161,7 @@ fn run() -> Result<ExitCode, String> {
             ui::status("Created", "project layout in the current folder");
             return Ok(ExitCode::SUCCESS);
         }
-        "build" | "run" | "test" | "info" | "clean" | "watch" => {}
+        "build" | "run" | "debug" | "test" | "info" | "clean" | "watch" => {}
         other => return Err(format!("unknown command '{other}' (see `easypp --help`)")),
     }
 
@@ -190,6 +191,7 @@ fn run() -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         "run" => run_bin(&project, &cli, &invoked_from),
+        "debug" => debug_bin(&project, &cli, &invoked_from),
         "test" => run_tests(&project, &cli),
         "info" => {
             print_info(&project);
@@ -228,33 +230,79 @@ pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Pro
     Ok(project)
 }
 
-fn run_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {
+/// The program named on the command line (`debug` also accepts tests), or
+/// the only program when there is just one.
+fn pick_target<'a>(
+    project: &'a Project,
+    cli: &Cli,
+    with_tests: bool,
+) -> Result<&'a Target, String> {
+    let candidates: Vec<&Target> = if with_tests {
+        project.bins.iter().chain(&project.tests).collect()
+    } else {
+        project.bins.iter().collect()
+    };
     let names = || {
-        project
-            .bins
+        candidates
             .iter()
             .map(|b| b.name.as_str())
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let target = match cli.positional.first() {
-        Some(name) => project
-            .bins
+    match cli.positional.first() {
+        Some(name) => candidates
             .iter()
             .find(|b| &b.name == name)
-            .ok_or_else(|| format!("no executable named '{name}'. Available: {}", names()))?,
+            .copied()
+            .ok_or_else(|| format!("no program named '{name}'. Available: {}", names())),
         None => match project.bins.as_slice() {
-            [only] => only,
-            [] => return Err("there is nothing to run: src/bin has no .c/.cpp files".into()),
-            _ => {
-                return Err(format!(
-                    "several executables exist; pick one: easypp run <{}>",
-                    names()
-                ));
-            }
+            [only] => Ok(only),
+            [] => Err("there is nothing to run: src/bin has no .c/.cpp files".into()),
+            _ => Err(format!(
+                "several programs exist; pick one: easypp {} <{}>",
+                cli.command,
+                names()
+            )),
         },
-    };
+    }
+}
 
+/// Builds the program and starts it under gdb (or lldb). Sanitizer errors
+/// abort, so the debugger stops right where the bug is.
+fn debug_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {
+    let target = pick_target(project, cli, true)?;
+    builder::build(project, &cli.opts, &[target])?;
+    let exe = project.root.join(builder::exe_path(&cli.opts, target));
+
+    let mut command = if system::in_path("gdb") {
+        let mut c = Command::new("gdb");
+        c.args(["-q", "--args"]).arg(&exe);
+        c
+    } else if system::in_path("lldb") {
+        let mut c = Command::new("lldb");
+        c.arg("--").arg(&exe);
+        c
+    } else {
+        return Err("no debugger found: install gdb or lldb".into());
+    };
+    ui::status(
+        "Debugging",
+        &builder::exe_path(&cli.opts, target).display().to_string(),
+    );
+    let status = command
+        .args(&cli.passthrough)
+        .current_dir(invoked_from)
+        // LeakSanitizer cannot run under a debugger (ptrace); abort on errors
+        // so the debugger stops at them.
+        .env("ASAN_OPTIONS", "abort_on_error=1:detect_leaks=0")
+        .env("UBSAN_OPTIONS", "abort_on_error=1:print_stacktrace=1")
+        .status()
+        .map_err(|e| format!("cannot start the debugger: {e}"))?;
+    Ok(exit_code(status))
+}
+
+fn run_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {
+    let target = pick_target(project, cli, false)?;
     builder::build(project, &cli.opts, &[target])?;
     let exe = project.root.join(builder::exe_path(&cli.opts, target));
     ui::status(
