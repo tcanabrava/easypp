@@ -22,6 +22,8 @@ easypp new hello && cd hello
 easypp run                # build and run (pick one with `easypp run <name>`)
 easypp test               # build and run src/tests: in parallel, 60 s limit each
 easypp debug [name]       # build and start a program or test under gdb/lldb
+easypp fmt [--check]      # format with clang-format (--check: report only)
+easypp lint                # check for common bugs with clang-tidy
 easypp build --release    # -O2 -DNDEBUG instead of -O0 -g
 easypp info               # what was discovered, and what links to what
 easypp clean
@@ -88,6 +90,12 @@ easypp clean
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.
+- **Formatting and linting**: `easypp fmt` formats the project's own code
+  (WebKit-like: four spaces, braces on every body, 120 columns) and
+  `easypp lint` runs clang-tidy with checks that find real bugs (use after move,
+  unchecked conversions, exceptions escaping, ...) without style nagging.
+  `easypp new` writes these settings as `.clang-format` and `.clang-tidy`, so
+  the editor agrees with the commands; a project's own files always win.
 - **Tests**: each program in `src/tests` is a test that passes when it exits
   with 0. Tests run in parallel (`-j`), each with a time limit (`--timeout`,
   60 s by default), and only failing tests show their output. GoogleTest and

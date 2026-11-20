@@ -7,6 +7,7 @@ mod qt;
 mod scaffold;
 mod system;
 mod testrun;
+mod tools;
 mod ui;
 mod watch;
 
@@ -28,6 +29,8 @@ Commands:
   run [name] [-- args]  Build and run an executable from src/bin
   debug [name] [-- args] Build and start a program or test under gdb/lldb
   test [filter]         Build and run the programs in src/tests
+  fmt [--check]         Format the project's code (clang-format)
+  lint                  Check the code for common bugs (clang-tidy)
   info                  Show what was discovered and what links to what
   watch                 Keep compile_commands.json (and Qt's generated files)
                         up to date as src/ changes (also: --watch)
@@ -61,6 +64,8 @@ struct Cli {
     opts: Options,
     /// Per test, for `easypp test`.
     timeout: Duration,
+    /// `easypp fmt --check`: report instead of rewriting.
+    check: bool,
 }
 
 fn parse(args: Vec<String>) -> Result<Cli, String> {
@@ -76,6 +81,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
     };
 
     let mut timeout = Duration::from_secs(60);
+    let mut check = false;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -88,6 +94,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
             "-v" | "--verbose" => opts.verbose = true,
             "--no-cache" => opts.cache = false,
             "--no-sanitize" => opts.sanitize = false,
+            "--check" => check = true,
             "-h" | "--help" => command = Some("help".to_string()),
             "-V" | "--version" => command = Some("version".to_string()),
             "--timeout" => {
@@ -117,6 +124,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
         passthrough,
         opts,
         timeout,
+        check,
     })
 }
 
@@ -161,7 +169,7 @@ fn run() -> Result<ExitCode, String> {
             ui::status("Created", "project layout in the current folder");
             return Ok(ExitCode::SUCCESS);
         }
-        "build" | "run" | "debug" | "test" | "info" | "clean" | "watch" => {}
+        "build" | "run" | "debug" | "test" | "info" | "clean" | "watch" | "fmt" | "lint" => {}
         other => return Err(format!("unknown command '{other}' (see `easypp --help`)")),
     }
 
@@ -182,6 +190,14 @@ fn run() -> Result<ExitCode, String> {
     if cli.command == "watch" {
         watch::run(&root, &cli.opts);
     }
+    if cli.command == "fmt" {
+        let ok = tools::format(&root, cli.check)?;
+        return Ok(if ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
 
     let project = load_project(&root, &cli.opts)?;
     match cli.command.as_str() {
@@ -192,6 +208,11 @@ fn run() -> Result<ExitCode, String> {
         }
         "run" => run_bin(&project, &cli, &invoked_from),
         "debug" => debug_bin(&project, &cli, &invoked_from),
+        "lint" => Ok(if tools::lint(&project, &cli.opts)? {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        }),
         "test" => run_tests(&project, &cli),
         "info" => {
             print_info(&project);

@@ -105,7 +105,13 @@ fn write_layout(dir: &Path) -> Result<(), String> {
         let path = dir.join(d);
         fs::create_dir_all(&path).map_err(|e| format!("cannot create {}: {e}", path.display()))?;
     }
-    for (name, content) in FILES {
+    // Editor settings: clangd then formats and lints like `easypp fmt`/`lint`.
+    let tidy = crate::tools::tidy_file();
+    let config = [
+        (".clang-format", crate::tools::FORMAT_STYLE),
+        (".clang-tidy", tidy.as_str()),
+    ];
+    for (name, content) in FILES.iter().copied().chain(config) {
         let path = dir.join(name);
         if !path.exists() {
             fs::write(&path, content)
