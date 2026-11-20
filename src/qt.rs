@@ -37,11 +37,12 @@ pub struct QtFiles {
     pub ui: Vec<PathBuf>,
     pub qrc: Vec<PathBuf>,
     pub kconfig: Vec<PathBuf>,
+    pub gresource: Vec<PathBuf>,
 }
 
 impl QtFiles {
     pub fn from_files(files: &[PathBuf], moc: Vec<PathBuf>) -> QtFiles {
-        let with_ext = |ext: &str| {
+        let with_ext = |ext: &str| -> Vec<PathBuf> {
             files
                 .iter()
                 .filter(|f| f.extension().is_some_and(|e| e == ext))
@@ -50,14 +51,31 @@ impl QtFiles {
         };
         QtFiles {
             moc,
-            ui: with_ext("ui"),
+            ui: with_ext("ui")
+                .into_iter()
+                .filter(|p| {
+                    fs::read_to_string(p).is_ok_and(|s| s.contains("<ui ") || s.contains("<ui>"))
+                })
+                .collect(),
             qrc: with_ext("qrc"),
             kconfig: with_ext("kcfgc"),
+            gresource: files
+                .iter()
+                .filter(|p| p.to_string_lossy().ends_with(".gresource.xml"))
+                .cloned()
+                .collect(),
         }
     }
 
+    pub fn needs_qt(&self) -> bool {
+        !(self.moc.is_empty()
+            && self.ui.is_empty()
+            && self.qrc.is_empty()
+            && self.kconfig.is_empty())
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.moc.is_empty() && self.ui.is_empty() && self.qrc.is_empty() && self.kconfig.is_empty()
+        !self.needs_qt() && self.gresource.is_empty()
     }
 
     pub fn summary(&self) -> String {
@@ -67,6 +85,7 @@ impl QtFiles {
             ("uic", &self.ui),
             ("rcc", &self.qrc),
             ("kconfig", &self.kconfig),
+            ("gresource", &self.gresource),
         ] {
             if !files.is_empty() {
                 let names: Vec<String> = files
@@ -251,7 +270,7 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
     for qrc in &files.qrc {
         let output = unique(format!("qrc_{}", stem(qrc)), ".cpp");
         let mut inputs = vec![qrc.clone()];
-        inputs.extend(qrc_files(qrc));
+        inputs.extend(resource_files(qrc));
         plan.resources.push(output.clone());
         plan.generate.push(Step {
             tool: "rcc",
@@ -270,6 +289,38 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         });
     }
     plan
+}
+
+/// GLib resources, like Qt resources, register themselves at program startup.
+pub fn glib_resources(plan: &mut Plan, files: &QtFiles, dir: &Path) {
+    for (i, manifest) in files.gresource.iter().enumerate() {
+        let output = dir.join(format!("gresource_{i}.c"));
+        let mut inputs = vec![manifest.clone()];
+        inputs.extend(resource_files(manifest));
+        plan.resources.push(output.clone());
+        plan.generate.push(Step {
+            tool: "glib-compile-resources",
+            input: manifest.clone(),
+            output: output.clone(),
+            cmd: vec![
+                "glib-compile-resources".into(),
+                "--generate-source".into(),
+                "--c-name".into(),
+                format!(
+                    "easypp_{}_gresource_{i}",
+                    dir.to_string_lossy()
+                        .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+                ),
+                "--sourcedir".into(),
+                manifest.parent().unwrap().display().to_string(),
+                "--target".into(),
+                output.display().to_string(),
+                manifest.display().to_string(),
+            ],
+            inputs,
+            additional_outputs: vec![],
+        });
+    }
 }
 
 /// Resolve File= relative to the .kcfgc, as KConfig's build integration does.
@@ -307,8 +358,8 @@ pub fn moc_flags(compile_flags: &[String]) -> Vec<String> {
     out
 }
 
-/// The files a .qrc lists, so editing an icon regenerates the resource.
-fn qrc_files(qrc: &Path) -> Vec<PathBuf> {
+/// Files listed in Qt and GLib resource manifests.
+pub(crate) fn resource_files(qrc: &Path) -> Vec<PathBuf> {
     let Ok(text) = fs::read_to_string(qrc) else {
         return Vec::new();
     };
@@ -361,6 +412,7 @@ mod tests {
             ui: vec!["a/window.ui".into()],
             qrc: vec![],
             kconfig: vec![],
+            gresource: vec![],
         };
         let plan = plan(&tools, &files, Path::new("gen"), &["-DX".into()]);
         assert_eq!(plan.ui[0].output, PathBuf::from("gen/ui_window.h"));

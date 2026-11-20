@@ -312,10 +312,14 @@ fn examples_build_and_pass_their_tests() {
 
 /// Build the actual executables with no generated files or discovery cache.
 #[test]
-#[ignore = "requires Qt 6 and KDE Frameworks 6 development packages"]
+#[ignore = "requires Qt 6, KDE Frameworks 6 and GTK 4 VTE development packages"]
 fn desktop_examples_build_from_source() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    for (example, executable) in [("qt-tasks", "tasks"), ("kmines", "kmines")] {
+    for (example, executable) in [
+        ("qt-tasks", "tasks"),
+        ("kmines", "kmines"),
+        ("vte", "vte-demo"),
+    ] {
         let p = Project::new(example);
         p.remove("src");
         let status = Command::new("cp")
@@ -372,4 +376,30 @@ fn kde_kconfig_incremental_build() {
         "File=missing.kcfg\nClassName=Options\n",
     );
     assert!(p.fails(&["build"]).contains("does not exist"));
+}
+
+#[test]
+#[ignore = "requires GLib development tools"]
+fn glib_resources_build_and_regenerate() {
+    let p = Project::new("glib-resources");
+    p.remove("src/bin/hello.cpp");
+    p.write("src/bin/check/app.gresource.xml",
+        "<gresources><gresource prefix=\"/demo\"><file>message.ui</file></gresource></gresources>\n");
+    p.write("src/bin/check/message.ui", "<interface/>\n");
+    p.write(
+        "src/bin/check/main.c",
+        r#"
+#include <gio/gio.h>
+int main(void) {
+    GBytes *bytes = g_resources_lookup_data("/demo/message.ui", 0, NULL);
+    if (!bytes) return 1;
+    g_bytes_unref(bytes);
+    return 0;
+}
+"#,
+    );
+    assert!(p.ok(&["run", "check"]).contains("glib-compile-resources"));
+    assert!(!p.ok(&["build"]).contains("Generating"));
+    p.write("src/bin/check/message.ui", "<interface> </interface>\n");
+    assert!(p.ok(&["run", "check"]).contains("glib-compile-resources"));
 }

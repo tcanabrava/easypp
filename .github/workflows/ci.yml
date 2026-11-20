@@ -16,7 +16,7 @@ jobs:
           pacman -Syu --noconfirm --needed \
             git rust clang lld openmp pkgconf cmake ninja gdb \
             zlib sdl2-compat gtk4 boost qt6-base gtest catch2 \
-            libkdegames kcrash kdbusaddons kiconthemes
+            libkdegames kcrash kdbusaddons kiconthemes vte4 fmt pcre2
 
       - uses: actions/checkout@v4
 

@@ -173,14 +173,15 @@ fn component(
             cflags.push(format!("-I{}", gen_dir(opts, &lib_key(lib)).display()));
         }
     }
-    let plan = match &project.qt_tools {
-        Some(tools) if !qt_files.is_empty() => {
+    let mut plan = match &project.qt_tools {
+        Some(tools) if qt_files.needs_qt() => {
             let mut flags = base_includes(project);
             flags.extend(cflags.iter().cloned());
             qt::plan(tools, qt_files, &gen_dir(opts, key), &qt::moc_flags(&flags))
         }
         _ => qt::Plan::default(),
     };
+    qt::glib_resources(&mut plan, qt_files, &gen_dir(opts, key));
     let mut all_sources = sources.to_vec();
     all_sources.extend(plan.sources.iter().cloned());
     Component {
@@ -487,9 +488,6 @@ fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result
 /// compiling anything: generated headers such as ui_*.h then exist for the
 /// editor. Used by `easypp watch`.
 pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
-    if project.qt_tools.is_none() {
-        return Ok(());
-    }
     let libs = lib_components(project, opts);
     let targets: Vec<Component> = project
         .bins

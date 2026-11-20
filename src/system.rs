@@ -35,7 +35,7 @@ pub enum SysDep {
 
 /// Bump whenever the header-to-library rules change, so cached answers from
 /// older rules are thrown away (it is part of the fingerprint).
-const RULES_VERSION: u32 = 7; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
+const RULES_VERSION: u32 = 8; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
 
 /// What `includes()` reports for a `#pragma omp` line.
 pub const OPENMP_PRAGMA: &str = "#pragma omp";
@@ -275,6 +275,12 @@ impl System {
         )
     }
 
+    pub fn package(&self, name: &str) -> Option<SysDep> {
+        self.by_name
+            .get(&normalize(name))
+            .map(|&i| SysDep::Pkg(self.snapshot.packages[i].name.clone()))
+    }
+
     /// The system library behind an `#include`, if any.
     pub fn resolve(&self, include: &str) -> Option<SysDep> {
         if let Some(hit) = self.resolved.borrow().get(include) {
@@ -334,6 +340,7 @@ impl System {
                 depth(db)
                     .cmp(&depth(da))
                     .then(folder_version(db).cmp(&folder_version(da)))
+                    .then_with(|| gtk_variant(db).cmp(&gtk_variant(da)))
                     .then(pa.include_dirs.len().cmp(&pb.include_dirs.len()))
                     .then(pa.name.len().cmp(&pb.name.len()))
                     .then(pa.name.cmp(&pb.name))
@@ -531,6 +538,15 @@ fn module_library(include: &str) -> Option<String> {
 /// The version in an include folder's name: `/usr/include/gtk-4.0` -> [4, 0],
 /// `glibmm-2.68` -> [2, 68], `SDL2` -> [2], `SDL` -> []. (Package names are
 /// not reliable for this: `gdk-x11-3.0` would read as version 11.)
+// Some packages install parallel GTK variants, e.g. vte-2.91 and vte-2.91-gtk4.
+fn gtk_variant(dir: &Path) -> u32 {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.rsplit_once("-gtk"))
+        .and_then(|(_, version)| version.parse().ok())
+        .unwrap_or(0)
+}
+
 fn folder_version(dir: &Path) -> Vec<u32> {
     dir.file_name()
         .map_or_else(Vec::new, |name| version(&name.to_string_lossy()))

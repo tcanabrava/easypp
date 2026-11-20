@@ -320,6 +320,40 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
     for lib in &target.libs {
         sources.extend(project.libs[lib].qt.qrc.iter().map(|s| path(s)));
     }
+    let manifests = target.qt.gresource.iter().chain(
+        target
+            .libs
+            .iter()
+            .flat_map(|lib| &project.libs[lib].qt.gresource),
+    );
+    for (i, manifest) in manifests.enumerate() {
+        let name = format!(
+            "easypp_{}_gresource_{i}",
+            target
+                .name
+                .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+        );
+        let output = format!("${{CMAKE_CURRENT_BINARY_DIR}}/{name}.c");
+        let input = format!("${{CMAKE_CURRENT_SOURCE_DIR}}/{}", path(manifest));
+        let directory = format!(
+            "${{CMAKE_CURRENT_SOURCE_DIR}}/{}",
+            path(manifest.parent().unwrap())
+        );
+        let dependencies = crate::qt::resource_files(manifest)
+            .iter()
+            .map(|p| format!("\"${{CMAKE_CURRENT_SOURCE_DIR}}/{}\"", path(p)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(
+            w,
+            "find_program(EASYPP_GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)"
+        );
+        let _ = writeln!(
+            w,
+            "add_custom_command(OUTPUT \"{output}\" COMMAND \"${{EASYPP_GLIB_COMPILE_RESOURCES}}\" --generate-source --c-name {name} --sourcedir \"{directory}\" --target \"{output}\" \"{input}\" DEPENDS \"{input}\" {dependencies} VERBATIM)"
+        );
+        sources.push(format!("\"{output}\""));
+    }
     let deps: Vec<String> = target
         .libs
         .iter()

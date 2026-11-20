@@ -232,6 +232,7 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
             .filter_map(|i| system.resolve(i))
             .collect();
         lib.qt = QtFiles::from_files(&files, scan.moc);
+        lib.system.extend(resource_dep(&lib.qt, &system)?);
         if !lib.qt.kconfig.is_empty() {
             lib.system.extend(system.resolve("KConfigSkeleton"));
         }
@@ -275,7 +276,7 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         .values()
         .map(|l| (l.name.as_str(), &l.qt))
         .chain(bins.iter().chain(&tests).map(|t| (t.name.as_str(), &t.qt)))
-        .filter(|(_, q)| !q.is_empty())
+        .filter(|(_, q)| q.needs_qt())
         .collect();
     for (_, files) in &needs_qt {
         for config in &files.kconfig {
@@ -317,6 +318,22 @@ struct Context<'a> {
     system: &'a System,
     libs: &'a BTreeMap<String, Library>,
     lib_order: &'a [String],
+}
+
+fn resource_dep(files: &QtFiles, system: &System) -> Result<Option<SysDep>, String> {
+    if files.gresource.is_empty() {
+        return Ok(None);
+    }
+    if !crate::system::in_path("glib-compile-resources") {
+        return Err(
+            "GResource manifests need glib-compile-resources (install GLib development tools)"
+                .into(),
+        );
+    }
+    system
+        .package("gio-2.0")
+        .map(Some)
+        .ok_or_else(|| "GResource manifests need GIO development headers".into())
 }
 
 fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>, String> {
@@ -377,6 +394,11 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
         }
         if !qt.kconfig.is_empty() {
             system.extend(ctx.system.resolve("KConfigSkeleton"));
+        }
+        if let Some(dep) = resource_dep(&qt, ctx.system)?
+            && !system.contains(&dep)
+        {
+            system.push(dep);
         }
         let cflags = ctx.system.compile_flags(&system.iter().cloned().collect());
         let link_flags = ctx.system.link_flags(&system);

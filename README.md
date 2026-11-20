@@ -101,6 +101,10 @@ easypp clean
 - **Runtime data**: put shared assets under `data/<application>/`.
   `easypp run` and `easypp debug` prepend the project's `data/` to `XDG_DATA_DIRS`.
   See `examples/kmines` for an imported KDE application using these conventions.
+- **GLib resources**: a `.gresource.xml` manifest runs `glib-compile-resources`.
+  Changes to listed files regenerate the C source, which links directly into
+  executables so registration runs at startup. See `examples/vte` for the
+  upstream VTE GTK 4 demo.
 - **Moving on to CMake**: `easypp export-cmake` writes a CMakeLists.txt in
   which every folder is the target it was: libraries with their links and
   include paths, programs, CTest tests with the same timeout, pkg-config
