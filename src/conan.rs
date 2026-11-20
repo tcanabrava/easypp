@@ -34,14 +34,29 @@ pub fn metadata_files() -> Vec<PathBuf> {
 
 const MANIFEST: &str = "conanfile.txt";
 
-pub fn require_installed(root: &Path, opts: &Options) -> Result<(), String> {
+fn needs_install(root: &Path) -> bool {
     let manifest = root.join(MANIFEST);
     if !manifest.is_file() {
-        return Ok(());
+        return false;
     }
     let installed = package_dir().unwrap().join(MANIFEST);
     let stale = installed.is_file() && fs::read(&manifest).ok() != fs::read(&installed).ok();
-    if stale || metadata_files().is_empty() {
+    stale || metadata_files().is_empty()
+}
+
+pub fn ensure_installed(root: &Path, opts: &Options) -> Result<(), String> {
+    if needs_install(root) {
+        crate::ui::status(
+            "Installing",
+            &format!("Conan dependencies for {}", opts.profile()),
+        );
+        install(&[], &["--build=missing".into()], opts)?;
+    }
+    Ok(())
+}
+
+pub fn require_installed(root: &Path, opts: &Options) -> Result<(), String> {
+    if needs_install(root) {
         let release = if opts.release { " --release" } else { "" };
         return Err(format!(
             "Conan metadata is missing or out of date. Run `easypp deps install{release}`."
@@ -78,6 +93,78 @@ pub fn install(requested: &[String], flags: &[String], opts: &Options) -> Result
         let _ = fs::remove_dir_all(&staging);
     }
     result
+}
+
+/// Find or install an isolated user-local Conan without changing PATH.
+fn conan_program() -> Result<PathBuf, String> {
+    if crate::system::in_path("conan") {
+        return Ok("conan".into());
+    }
+
+    let (tool, bin_args, install_args): (&str, &[_], &[_]) = if crate::system::in_path("pipx") {
+        (
+            "pipx",
+            &["environment", "--value", "PIPX_BIN_DIR"],
+            &["install"],
+        )
+    } else if crate::system::in_path("uv") {
+        ("uv", &["tool", "dir", "--bin"], &["tool", "install"])
+    } else {
+        return Err("Conan 2 is required. Install pipx or uv so easypp can set up Conan, or put Conan 2 on PATH.".into());
+    };
+
+    let bin = Command::new(tool)
+        .args(bin_args)
+        .output()
+        .map_err(|e| format!("cannot find the {tool} executable directory: {e}"))?;
+    if !bin.status.success() {
+        return Err(format!(
+            "cannot find the {tool} executable directory: {}",
+            String::from_utf8_lossy(&bin.stderr).trim()
+        ));
+    }
+    let path = Path::new(String::from_utf8_lossy(&bin.stdout).trim()).join("conan");
+    if !path.is_file() {
+        crate::ui::status("Installing", &format!("Conan 2 with {tool}"));
+        let status = Command::new(tool)
+            .args(install_args)
+            .arg("conan>=2,<3")
+            .status()
+            .map_err(|e| format!("cannot run {tool}: {e}"))?;
+        if !status.success() || !path.is_file() {
+            return Err(format!(
+                "{tool} could not install Conan 2 at {} ({status})",
+                path.display()
+            ));
+        }
+    }
+    Ok(path)
+}
+
+/// Use the configured default profile when available. Bootstrap a project-local
+/// Clang profile on a fresh Conan installation.
+fn fallback_profile(conan: &Path, staging: &Path) -> Result<Option<PathBuf>, String> {
+    let default = Command::new(conan)
+        .args(["profile", "path", "default"])
+        .output()
+        .map_err(|e| format!("cannot run Conan 2: {e}"))?;
+    if default.status.success() {
+        return Ok(None);
+    }
+
+    let profile = staging.join("easypp.profile");
+    crate::ui::status("Detecting", "a Conan profile for Clang");
+    let status = Command::new(conan)
+        .args(["profile", "detect", "--name"])
+        .arg(&profile)
+        .env("CC", "clang")
+        .env("CXX", "clang++")
+        .status()
+        .map_err(|e| format!("cannot detect the Conan profile: {e}"))?;
+    if !status.success() {
+        return Err(format!("cannot detect the Conan profile ({status})"));
+    }
+    Ok(Some(profile))
 }
 
 fn install_into(
@@ -123,8 +210,24 @@ fn install_into(
 
     let output = staging.join("packages");
     let build_type = if opts.release { "Release" } else { "Debug" };
-    let mut command = Command::new("conan");
+    let conan = conan_program()?;
+    let mut command = Command::new(&conan);
     command.arg("install").arg(input);
+    if let Some(profile) = fallback_profile(&conan, staging)? {
+        command
+            .arg("--profile:host")
+            .arg(&profile)
+            .arg("--profile:build")
+            .arg(&profile)
+            .args([
+                "-s:h",
+                "compiler.cppstd=23",
+                "-c:a",
+                r#"tools.build:compiler_executables={"c":"clang","cpp":"clang++"}"#,
+            ])
+            .env("CC", "clang")
+            .env("CXX", "clang++");
+    }
     if !section_lines(&recipe, "generators").any(|line| line.trim() == "PkgConfigDeps") {
         command.args(["-g", "PkgConfigDeps"]);
     }

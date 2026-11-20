@@ -1,5 +1,6 @@
 mod builder;
 mod cache;
+mod cli;
 mod conan;
 mod cond;
 mod export;
@@ -15,136 +16,12 @@ mod ui;
 mod watch;
 
 use builder::Options;
+use clap::{CommandFactory, Parser};
+use cli::{Actions, Cli, DependencyAction, ProgramArgs, TestArgs};
 use project::{Project, Target};
 use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::time::Duration;
-
-const USAGE: &str = "\
-easypp: build small C and C++ projects with zero configuration
-
-Usage: easypp <command> [options]
-
-Commands:
-  new <name>            Create a new project in ./<name>
-  init                  Create the project layout in the current folder
-  build                 Build all libraries and executables
-  deps add <ref>...     Record and install Conan packages
-  deps install          Install packages from conanfile.txt
-  run [name] [-- args]  Build and run an executable from src/bin
-  debug [name] [-- args] Build and start a program or test under lldb
-  test [filter]         Build and run the programs in src/tests
-  fmt [--check]         Format the project's code (clang-format)
-  lint                  Check the code for common bugs (clang-tidy)
-  info                  Show what was discovered and what links to what
-  export-cmake [--force] Write a CMakeLists.txt that builds the same way
-  watch                 Keep compile_commands.json (and Qt's generated files)
-                        up to date as src/ changes (also: --watch)
-  clean                 Remove the build/ folder
-
-Options:
-  -r, --release         Optimized build (-O2 -DNDEBUG) instead of debug
-                        (-O0 -g, with AddressSanitizer and UBSan)
-  -j, --jobs <N>        Parallel compile jobs and tests (default: number of CPUs)
-      --timeout <SECS>  Time limit for each test (default: 60)
-  -v, --verbose         Print every compiler command
-      --no-cache        Ignore build/easypp.db (detect and scan everything)
-      --no-sanitize     Debug builds without AddressSanitizer/UBSan
-  -h, --help            Show this help
-  -V, --version         Show the version
-
-Layout:
-  src/libs/<name>/      static library <name>
-  src/bin/<name>.cpp    executable <name> (or a folder src/bin/<name>/)
-  src/tests/<name>.cpp  test <name>: passes when it exits with 0
-  src/thirdparty/       third-party headers (-isystem)
-
-#include \"<lib>/<header>\" and easypp links <lib> for you.
-#include <SDL2/SDL.h> (or any system header) and easypp finds the system
-library through pkg-config or /usr/lib, /usr/local/lib, ...";
-
-struct Cli {
-    command: String,
-    positional: Vec<String>,
-    passthrough: Vec<String>,
-    opts: Options,
-    /// Per test, for `easypp test`.
-    timeout: Duration,
-    /// `easypp fmt --check`: report instead of rewriting.
-    check: bool,
-    /// `easypp export-cmake --force`: replace an existing CMakeLists.txt.
-    force: bool,
-}
-
-fn parse(args: Vec<String>) -> Result<Cli, String> {
-    let mut command = None;
-    let mut positional = Vec::new();
-    let mut passthrough = Vec::new();
-    let mut opts = Options {
-        release: false,
-        jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
-        verbose: false,
-        cache: true,
-        sanitize: true,
-    };
-
-    let mut timeout = Duration::from_secs(60);
-    let mut check = false;
-    let mut force = false;
-    let mut it = args.into_iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--" => {
-                passthrough.extend(it.by_ref());
-                break;
-            }
-            "-r" | "--release" => opts.release = true,
-            "--watch" if command.is_none() => command = Some("watch".to_string()),
-            "-v" | "--verbose" => opts.verbose = true,
-            "--no-cache" => opts.cache = false,
-            "--no-sanitize" => opts.sanitize = false,
-            "--check" => check = true,
-            "--force" => force = true,
-            "-h" | "--help" => command = Some("help".to_string()),
-            "-V" | "--version" => command = Some("version".to_string()),
-            "--timeout" => {
-                let value = it.next().ok_or("--timeout needs a number of seconds")?;
-                timeout = value
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|s| *s > 0)
-                    .map(Duration::from_secs)
-                    .ok_or(format!("invalid timeout '{value}'"))?;
-            }
-            "-j" | "--jobs" => {
-                let value = it.next().ok_or("-j needs a number")?;
-                opts.jobs = parse_jobs(&value)?;
-            }
-            s if s.starts_with("-j") && s.len() > 2 => opts.jobs = parse_jobs(&s[2..])?,
-            s if s.starts_with('-') => {
-                return Err(format!("unknown option '{s}' (see `easypp --help`)"));
-            }
-            _ if command.is_none() => command = Some(arg),
-            _ => positional.push(arg),
-        }
-    }
-    Ok(Cli {
-        command: command.unwrap_or_else(|| "help".into()),
-        positional,
-        passthrough,
-        opts,
-        timeout,
-        check,
-        force,
-    })
-}
-
-fn parse_jobs(value: &str) -> Result<usize, String> {
-    match value.parse::<usize>() {
-        Ok(n) if n > 0 => Ok(n),
-        _ => Err(format!("invalid job count '{value}'")),
-    }
-}
 
 fn main() -> ExitCode {
     match run() {
@@ -157,32 +34,39 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, String> {
-    let cli = parse(std::env::args().skip(1).collect())?;
-
-    match cli.command.as_str() {
-        "help" => {
-            println!("{USAGE}");
+    let Cli {
+        command,
+        build,
+        watch,
+    } = Cli::parse();
+    if watch && command.is_some() {
+        return Err(
+            "--watch is an alias for the watch command and cannot be combined with another command"
+                .into(),
+        );
+    }
+    let action = match command {
+        Some(command) => command,
+        None if watch => Actions::Watch,
+        None => {
+            Cli::command().print_help().map_err(|e| e.to_string())?;
             return Ok(ExitCode::SUCCESS);
         }
-        "version" => {
-            println!("easypp {}", env!("CARGO_PKG_VERSION"));
-            return Ok(ExitCode::SUCCESS);
-        }
-        "new" => {
-            let name = cli.positional.first().ok_or("usage: easypp new <name>")?;
+    };
+    let opts = build.into();
+    match &action {
+        Actions::New { name } => {
             scaffold::new_project(Path::new(name))?;
             ui::status("Created", &format!("project '{name}'"));
             eprintln!("\n    cd {name} && easypp run\n");
             return Ok(ExitCode::SUCCESS);
         }
-        "init" => {
+        Actions::Init => {
             scaffold::init(Path::new("."))?;
             ui::status("Created", "project layout in the current folder");
             return Ok(ExitCode::SUCCESS);
         }
-        "build" | "run" | "debug" | "test" | "info" | "clean" | "watch" | "fmt" | "lint"
-        | "export-cmake" | "deps" => {}
-        other => return Err(format!("unknown command '{other}' (see `easypp --help`)")),
+        _ => {}
     }
 
     // Everything below works from the project root, with paths relative to it.
@@ -190,66 +74,68 @@ fn run() -> Result<ExitCode, String> {
     let root = project::find_root(&invoked_from)?;
     std::env::set_current_dir(&root).map_err(|e| e.to_string())?;
 
-    conan::configure(&root, &cli.opts);
-    if cli.command == "deps" {
-        let requested = match cli.positional.as_slice() {
-            [command] if command == "install" => &[][..],
-            [command, refs @ ..] if command == "add" && !refs.is_empty() => refs,
-            _ => {
-                return Err(
-                    "usage: easypp deps add <name/version>... | easypp deps install".into(),
-                );
-            }
-        };
-        conan::install(requested, &cli.passthrough, &cli.opts)?;
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    if cli.command == "clean" {
-        if Path::new(builder::BUILD_DIR).exists() {
-            std::fs::remove_dir_all(builder::BUILD_DIR)
-                .map_err(|e| format!("cannot remove build/: {e}"))?;
+    conan::configure(&root, &opts);
+    match action {
+        Actions::Deps { action } => {
+            let (references, args) = match action {
+                DependencyAction::Add {
+                    references,
+                    install,
+                } => (references, install.into_flags()),
+                DependencyAction::Install(install) => (Vec::new(), install.into_flags()),
+            };
+            conan::install(&references, &args, &opts)?;
+            return Ok(ExitCode::SUCCESS);
         }
-        ui::status("Removed", "build/");
-        return Ok(ExitCode::SUCCESS);
+        Actions::Clean => {
+            if Path::new(builder::BUILD_DIR).exists() {
+                std::fs::remove_dir_all(builder::BUILD_DIR)
+                    .map_err(|e| format!("cannot remove build/: {e}"))?;
+            }
+            ui::status("Removed", "build/");
+            return Ok(ExitCode::SUCCESS);
+        }
+        Actions::Watch => watch::run(&root, &opts),
+        Actions::Fmt { check } => {
+            return Ok(if tools::format(&root, check)? {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
+        _ => {}
     }
 
-    if cli.command == "watch" {
-        watch::run(&root, &cli.opts);
+    if matches!(
+        action,
+        Actions::Build | Actions::Run(_) | Actions::Debug(_) | Actions::Test(_)
+    ) {
+        conan::ensure_installed(&root, &opts)?;
     }
-    if cli.command == "fmt" {
-        let ok = tools::format(&root, cli.check)?;
-        return Ok(if ok {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        });
-    }
-
-    let project = load_project(&root, &cli.opts)?;
-    match cli.command.as_str() {
-        "build" => {
+    let project = load_project(&root, &opts)?;
+    match action {
+        Actions::Build => {
             let targets: Vec<&Target> = project.bins.iter().collect();
-            builder::build(&project, &cli.opts, &targets)?;
+            builder::build(&project, &opts, &targets)?;
             Ok(ExitCode::SUCCESS)
         }
-        "run" => run_bin(&project, &cli, &invoked_from),
-        "debug" => debug_bin(&project, &cli, &invoked_from),
-        "export-cmake" => {
-            export::write(&project, cli.force)?;
+        Actions::Run(args) => run_bin(&project, &opts, &args, &invoked_from),
+        Actions::Debug(args) => debug_bin(&project, &opts, &args, &invoked_from),
+        Actions::ExportCmake { force } => {
+            export::write(&project, force)?;
             ui::status("Wrote", "CMakeLists.txt");
             eprintln!(
                 "\n    cmake -S . -B build-cmake -G Ninja && cmake --build build-cmake && ctest --test-dir build-cmake\n"
             );
             Ok(ExitCode::SUCCESS)
         }
-        "lint" => Ok(if tools::lint(&project, &cli.opts)? {
+        Actions::Lint => Ok(if tools::lint(&project, &opts)? {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE
         }),
-        "test" => run_tests(&project, &cli),
-        "info" => {
+        Actions::Test(args) => run_tests(&project, &opts, &args),
+        Actions::Info => {
             print_info(&project);
             Ok(ExitCode::SUCCESS)
         }
@@ -291,7 +177,7 @@ pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Pro
 /// the only program when there is just one.
 fn pick_target<'a>(
     project: &'a Project,
-    cli: &Cli,
+    name: Option<&str>,
     with_tests: bool,
 ) -> Result<&'a Target, String> {
     let candidates: Vec<&Target> = if with_tests {
@@ -306,10 +192,10 @@ fn pick_target<'a>(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    match cli.positional.first() {
+    match name {
         Some(name) => candidates
             .iter()
-            .find(|b| &b.name == name)
+            .find(|b| b.name == name)
             .copied()
             .ok_or_else(|| format!("no program named '{name}'. Available: {}", names())),
         None => match project.bins.as_slice() {
@@ -317,7 +203,7 @@ fn pick_target<'a>(
             [] => Err("there is nothing to run: src/bin has no .c/.cpp files".into()),
             _ => Err(format!(
                 "several programs exist; pick one: easypp {} <{}>",
-                cli.command,
+                if with_tests { "debug" } else { "run" },
                 names()
             )),
         },
@@ -327,10 +213,15 @@ fn pick_target<'a>(
 /// Builds the program and starts it under lldb, LLVM's debugger, matching the
 /// clang toolchain (gdb only when lldb is missing). Sanitizer errors abort, so
 /// the debugger stops right where the bug is.
-fn debug_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {
-    let target = pick_target(project, cli, true)?;
-    builder::build(project, &cli.opts, &[target])?;
-    let exe = project.root.join(builder::exe_path(&cli.opts, target));
+fn debug_bin(
+    project: &Project,
+    opts: &Options,
+    args: &ProgramArgs,
+    invoked_from: &Path,
+) -> Result<ExitCode, String> {
+    let target = pick_target(project, args.name.as_deref(), true)?;
+    builder::build(project, opts, &[target])?;
+    let exe = project.root.join(builder::exe_path(opts, target));
 
     let mut command = if system::in_path("lldb") {
         let mut c = Command::new("lldb");
@@ -345,11 +236,11 @@ fn debug_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCo
     };
     ui::status(
         "Debugging",
-        &builder::exe_path(&cli.opts, target).display().to_string(),
+        &builder::exe_path(opts, target).display().to_string(),
     );
     runtime_data(&mut command, project);
     let status = command
-        .args(&cli.passthrough)
+        .args(&args.args)
         .current_dir(invoked_from)
         // LeakSanitizer cannot run under a debugger (ptrace); abort on errors
         // so the debugger stops at them.
@@ -375,30 +266,35 @@ fn runtime_data(command: &mut Command, project: &Project) {
     }
 }
 
-fn run_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {
-    let target = pick_target(project, cli, false)?;
-    builder::build(project, &cli.opts, &[target])?;
-    let exe = project.root.join(builder::exe_path(&cli.opts, target));
+fn run_bin(
+    project: &Project,
+    opts: &Options,
+    args: &ProgramArgs,
+    invoked_from: &Path,
+) -> Result<ExitCode, String> {
+    let target = pick_target(project, args.name.as_deref(), false)?;
+    builder::build(project, opts, &[target])?;
+    let exe = project.root.join(builder::exe_path(opts, target));
     ui::status(
         "Running",
-        &builder::exe_path(&cli.opts, target).display().to_string(),
+        &builder::exe_path(opts, target).display().to_string(),
     );
     let mut command = Command::new(&exe);
     runtime_data(&mut command, project);
     let status = command
-        .args(&cli.passthrough)
+        .args(&args.args)
         .current_dir(invoked_from)
         .status()
         .map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
     Ok(exit_code(status))
 }
 
-fn run_tests(project: &Project, cli: &Cli) -> Result<ExitCode, String> {
-    let filter = cli.positional.first();
+fn run_tests(project: &Project, opts: &Options, args: &TestArgs) -> Result<ExitCode, String> {
+    let filter = args.filter.as_deref();
     let tests: Vec<&Target> = project
         .tests
         .iter()
-        .filter(|t| filter.is_none_or(|f| t.name.contains(f.as_str())))
+        .filter(|t| filter.is_none_or(|f| t.name.contains(f)))
         .collect();
     if tests.is_empty() {
         eprintln!(
@@ -408,20 +304,20 @@ fn run_tests(project: &Project, cli: &Cli) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    builder::build(project, &cli.opts, &tests)?;
+    builder::build(project, opts, &tests)?;
     let tests: Vec<testrun::Test> = tests
         .iter()
         .map(|t| testrun::Test {
             name: t.name.clone(),
-            exe: project.root.join(builder::exe_path(&cli.opts, t)),
+            exe: project.root.join(builder::exe_path(opts, t)),
         })
         .collect();
     let passed = testrun::run(
         &tests,
-        &cli.passthrough,
+        &args.args,
         &project.root,
-        cli.opts.jobs,
-        cli.timeout,
+        opts.jobs,
+        Duration::from_secs(args.timeout),
     )?;
     Ok(if passed {
         ExitCode::SUCCESS

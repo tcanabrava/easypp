@@ -74,8 +74,8 @@ multi-file program needs no build knowledge at all.
 
 This paper asks how far the same idea goes in C++. Our contributions are:
 
-+ #easypp, a build tool of about 6,000 lines of Rust whose only dependency is an
-  embedded database used as a build cache. It derives the
++ #easypp, a build tool of about 6,000 lines of Rust that uses Clap for
+  command-line parsing and an embedded database for the build cache. It derives the
   whole build from a fixed folder layout and from the `#include` lines in the
   sources, including system libraries, OpenMP, Boost and Qt 6 code generation
   (@sec-design).

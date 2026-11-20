@@ -112,6 +112,19 @@ fn have(tool: &str) -> bool {
 }
 
 #[test]
+fn help_exposes_nested_commands_and_command_specific_options() {
+    let p = Project::new("help");
+    assert!(p.ok(&[]).contains("easypp help deps add"));
+    let dependencies = p.ok(&["deps", "--help"]);
+    assert!(dependencies.contains("add") && dependencies.contains("install"));
+    let add = p.ok(&["help", "deps", "add"]);
+    assert!(add.contains("<NAME/VERSION>") && add.contains("--build-missing"));
+    assert!(p.ok(&["test", "--help"]).contains("--timeout"));
+    assert!(!p.ok(&["run", "--help"]).contains("--timeout"));
+    assert!(p.fails(&["build", "-j0"]).contains("0"));
+}
+
+#[test]
 fn new_project_builds_runs_and_tests() {
     let p = Project::new("new");
     assert!(p.ok(&["run"]).contains("Hello, world!"));
@@ -454,4 +467,55 @@ fn discovers_conan_metadata_for_the_selected_profile() {
         p.fails(&["build", "--release"])
             .contains("missing_easypp_probe")
     );
+}
+
+#[test]
+fn build_installs_missing_and_changed_conan_dependencies() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let p = Project::new("conan-auto-install");
+    p.write("conanfile.txt", "[requires]\nfixture/1\n");
+    // Stand in for Conan to check install calls without a remote or global profile.
+    p.write(
+        "tools/conan",
+        r#"#!/bin/sh
+set -eu
+if [ "$1" = profile ]; then exit 0; fi
+[ "$1" = install ]
+[ "$2" = conanfile.txt ]
+while [ "$1" != --output-folder ]; do shift; done
+mkdir -p "$2"
+printf 'Name: fixture\nDescription: test\nVersion: 1\n' >"$2/fixture.pc"
+printf 'install\n' >>conan-calls
+"#,
+    );
+    let conan = p.dir.join("tools/conan");
+    fs::set_permissions(conan, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(p.dir.join("tools"))
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let build = || {
+        let out = Command::new(easypp())
+            .args(["build", "--release"])
+            .current_dir(&p.dir)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+    };
+    let calls = || {
+        fs::read_to_string(p.dir.join("conan-calls"))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    build();
+    assert_eq!(calls(), 1);
+    build();
+    assert_eq!(calls(), 1);
+    p.write("conanfile.txt", "[requires]\nfixture/2\n");
+    build();
+    assert_eq!(calls(), 2);
 }

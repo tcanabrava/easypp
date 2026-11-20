@@ -30,6 +30,9 @@ easypp info               # what was discovered, and what links to what
 easypp clean
 ```
 
+Run `easypp --help` to list commands. Use `easypp help run` for a command's
+options or `easypp help deps add` for a nested command.
+
 ## How it works
 
 - **Libraries**: every folder in `src/libs/` is a static library made of all the
@@ -153,8 +156,9 @@ easypp clean
 
 ## Conan packages
 
-With Conan 2, pkg-config, and a Conan profile for your Clang toolchain, add a
-dependency from the project directory:
+With pkg-config and Clang installed, add a dependency from the project directory.
+Easypp uses Conan 2 on PATH or installs it for your user with pipx or uv.
+If no default Conan profile exists, easypp detects a local Clang profile.
 
 ```sh
 easypp deps add zlib/1.3.1 --release
@@ -163,17 +167,16 @@ easypp build --release
 
 `deps add` writes the reference to the `[requires]` section of `conanfile.txt`
 after a successful install. Adding another version of the same package replaces
-its reference. Check the manifest into version control. From a fresh checkout
-or after `easypp clean`, restore the dependencies with:
-
-```sh
-easypp deps install --release
-```
+its reference. Check the manifest into version control. On a fresh checkout,
+`easypp build --release` installs the recorded dependencies before compiling.
+`run`, `test`, and `debug` do the same when their dependencies are missing or
+the manifest has changed. These commands let Conan build missing binaries.
+Use `easypp deps install --release` to install explicitly, with `--build-missing`
+if needed.
 
 Use ordinary includes such as `#include <zlib.h>`. Conan generates pkg-config
 metadata under `build/conan/release/`. Omitting `--release` selects a separate
-Debug installation from the same manifest. If a binary is unavailable, append
-`-- --build=missing` to the dependency command. The manifest pins direct
+Debug installation from the same manifest. The manifest pins direct
 requirements. Commit a Conan lockfile as well to pin the resolved recipe graph.
 Configure exported CMake builds for the profile used to run `easypp export-cmake`.
 
