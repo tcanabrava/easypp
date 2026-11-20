@@ -5,6 +5,7 @@
 #include <QJsonObject>
 
 #include <algorithm>
+#include <utility>
 
 TaskList::TaskList(QObject* parent)
     : QObject(parent)
@@ -78,14 +79,15 @@ bool TaskList::fromJson(const QByteArray& json)
         return false;
     }
     QList<Task> loaded;
-    for (const QJsonValue& value : document.array()) {
+    const QJsonArray array = document.array();
+    for (const auto& value : array) {
         const QJsonObject object = value.toObject();
         if (!object.value("title").isString()) {
             return false;
         }
         loaded.append(Task {object.value("title").toString(), object.value("done").toBool()});
     }
-    tasks_ = loaded;
+    tasks_ = std::move(loaded);
     emit changed();
     return true;
 }

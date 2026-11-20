@@ -21,6 +21,7 @@ int main()
     constexpr int keys_per_client = 50;
     std::atomic<int> good_replies {0};
     std::vector<std::thread> threads;
+    threads.reserve(clients);
     for (int c = 0; c < clients; ++c) {
         threads.emplace_back([&, c] {
             std::vector<std::string> requests;

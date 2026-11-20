@@ -18,7 +18,7 @@ public:
 
 private:
     std::mt19937 rng_;
-    std::array<Shape, shape_count> round_;
+    std::array<Shape, shape_count> round_ {};
     int index_ = shape_count;
 };
 

@@ -281,16 +281,31 @@ fn export_cmake_builds() {
 }
 
 /// Needs SDL2, GTK4, OpenMP, Boost and Qt 6: `cargo test -- --ignored`.
+/// The examples are what students read, so they must also be formatted and
+/// lint-clean.
 #[test]
 #[ignore]
 fn examples_build_and_pass_their_tests() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let mut commands = vec![vec!["test"]];
+    if have("clang-format") {
+        commands.push(vec!["fmt", "--check"]);
+    }
+    if have("clang-tidy") {
+        commands.push(vec!["lint"]);
+    }
     for example in ["blockfall", "life", "asio-kv", "qt-tasks"] {
-        let out = Command::new(easypp())
-            .arg("test")
-            .current_dir(examples.join(example))
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{example}:\n{}", text(&out));
+        for args in &commands {
+            let out = Command::new(easypp())
+                .args(args)
+                .current_dir(examples.join(example))
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{example}: easypp {args:?}\n{}",
+                text(&out)
+            );
+        }
     }
 }

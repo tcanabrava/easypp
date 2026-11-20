@@ -21,6 +21,7 @@ int main()
     // Many threads writing at once lose nothing.
     kv::Store shared;
     std::vector<std::thread> writers;
+    writers.reserve(8);
     for (int t = 0; t < 8; ++t) {
         writers.emplace_back([&shared, t] {
             for (int i = 0; i < 500; ++i) {

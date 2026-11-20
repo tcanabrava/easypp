@@ -133,7 +133,8 @@ int main(int argc, char* argv[])
     const bool vsync = (info.flags & SDL_RENDERER_PRESENTVSYNC) != 0;
 
     blockfall::Game game(demo ? 2024 : fresh_seed());
-    std::mt19937 demo_moves(7);
+    // The demo must play the same way every time, so the seed is fixed on purpose.
+    std::mt19937 demo_moves(7); // NOLINT(bugprone-random-generator-seed)
     bool paused = false;
     bool running = true;
     long frames = 0;

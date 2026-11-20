@@ -14,6 +14,7 @@
 
 #include <gtk/gtk.h>
 
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +52,15 @@ void load_start(life::Simulation& simulation, std::uint32_t seed)
         life::randomize(grid, 0.25, seed);
         life::place(grid, life::Pattern::GliderGun, 4, 4);
     });
+}
+
+// A whole command-line number, or false if the text is not one (unlike atof,
+// which silently turns "abc" into 0).
+template <typename T> bool parse_number(const char* text, T& out)
+{
+    const char* end = text + std::strlen(text);
+    const auto [last, error] = std::from_chars(text, end, out);
+    return error == std::errc() && last == end;
 }
 
 // ---- drawing and status -------------------------------------------------
@@ -323,11 +333,17 @@ int main(int argc, char* argv[])
     for (int i = 1; i < argc; ++i) {
         const bool has_value = i + 1 < argc;
         if (std::strcmp(argv[i], "--smoke") == 0 && has_value) {
-            smoke = std::atof(argv[++i]);
+            if (!parse_number(argv[++i], smoke)) {
+                std::fprintf(stderr, "--smoke needs a number of seconds\n");
+                return 2;
+            }
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && has_value) {
             screenshot = argv[++i];
         } else if (std::strcmp(argv[i], "--headless") == 0 && has_value) {
-            headless_generations = std::atol(argv[++i]);
+            if (!parse_number(argv[++i], headless_generations)) {
+                std::fprintf(stderr, "--headless needs a number of generations\n");
+                return 2;
+            }
         } else if (std::strcmp(argv[i], "--png") == 0 && has_value) {
             png = argv[++i];
         } else {

@@ -15,7 +15,9 @@
 
 namespace po = boost::program_options;
 
-int main(int argc, char* argv[])
+namespace {
+
+int run(int argc, char* argv[])
 {
     po::options_description options("kv_server options");
     options.add_options()("help,h", "show this help")(
@@ -52,4 +54,19 @@ int main(int argc, char* argv[])
         return 1;
     }
     return 0;
+}
+
+}
+
+int main(int argc, char* argv[])
+{
+    // Errors are handled in run(); this only makes sure nothing escapes main.
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "kv_server: %s\n", e.what());
+    } catch (...) {
+        std::fprintf(stderr, "kv_server: unknown error\n");
+    }
+    return 1;
 }

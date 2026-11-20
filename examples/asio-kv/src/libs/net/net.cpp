@@ -4,6 +4,7 @@
 
 #include <boost/asio.hpp>
 
+#include <cstdio>
 #include <future>
 #include <thread>
 
@@ -30,8 +31,13 @@ asio::awaitable<void> session(tcp::socket socket, Store& store)
             const std::string answer = handle(store, line) + "\n";
             co_await asio::async_write(socket, asio::buffer(answer), asio::use_awaitable);
         }
-    } catch (const boost::system::system_error&) {
-        // The client closed the connection (or the server is stopping).
+    } catch (const boost::system::system_error& e) {
+        // A client hanging up, or the server stopping, is normal; anything else is reported.
+        const boost::system::error_code code = e.code();
+        if (code != asio::error::eof && code != asio::error::operation_aborted
+            && code != asio::error::connection_reset) {
+            std::fprintf(stderr, "kv_server: connection error: %s\n", code.message().c_str());
+        }
     }
 }
 

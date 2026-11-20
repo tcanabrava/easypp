@@ -8,7 +8,7 @@ namespace kv {
 
 namespace {
 
-std::string reply(json::object object)
+std::string reply(const json::object& object)
 {
     return json::serialize(object);
 }
@@ -24,7 +24,7 @@ const json::string* string_field(const json::object& request, std::string_view n
     return field != nullptr ? field->if_string() : nullptr;
 }
 
-std::string request(json::object object)
+std::string request(const json::object& object)
 {
     return json::serialize(object);
 }

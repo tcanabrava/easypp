@@ -8,9 +8,23 @@
 #include <QApplication>
 #include <QTimer>
 
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+namespace {
+
+// A whole command-line number, or false if the text is not one (unlike atof,
+// which silently turns "abc" into 0).
+template <typename T> bool parse_number(const char* text, T& out)
+{
+    const char* end = text + std::strlen(text);
+    const auto [last, error] = std::from_chars(text, end, out);
+    return error == std::errc() && last == end;
+}
+
+}
 
 int main(int argc, char* argv[])
 {
@@ -18,7 +32,10 @@ int main(int argc, char* argv[])
     const char* screenshot = nullptr;
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::strcmp(argv[i], "--smoke") == 0) {
-            smoke = std::atof(argv[++i]);
+            if (!parse_number(argv[++i], smoke)) {
+                std::fprintf(stderr, "--smoke needs a number of seconds\n");
+                return 2;
+            }
         } else if (std::strcmp(argv[i], "--screenshot") == 0) {
             screenshot = argv[++i];
         }

@@ -13,6 +13,7 @@
 #include <boost/program_options.hpp>
 #include <boost/system/system_error.hpp>
 
+#include <cstdio>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -41,7 +42,9 @@ std::vector<std::string> words_of(const std::string& line)
 
 }
 
-int main(int argc, char* argv[])
+namespace {
+
+int run(int argc, char* argv[])
 {
     po::options_description options("kv_client options");
     options.add_options()("help,h", "show this help")("host", po::value<std::string>()->default_value("127.0.0.1"),
@@ -93,4 +96,19 @@ int main(int argc, char* argv[])
         return 1;
     }
     return 0;
+}
+
+}
+
+int main(int argc, char* argv[])
+{
+    // Errors are handled in run(); this only makes sure nothing escapes main.
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "kv_client: %s\n", e.what());
+    } catch (...) {
+        std::fprintf(stderr, "kv_client: unknown error\n");
+    }
+    return 1;
 }
