@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Arch Linux: current clang, Qt 6, GTK 4 and Boost, with the same package
+    # names easypp was developed against.
+    container: archlinux:latest
+    steps:
+      - name: Install toolchain and example dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git rust clang lld openmp pkgconf cmake ninja gdb \
+            zlib sdl2-compat gtk4 boost qt6-base gtest catch2
+
+      - uses: actions/checkout@v4
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Lints
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      - name: Unit and integration tests
+        run: cargo test --release
+
+      - name: Examples (SDL2, GTK4 + OpenMP, Boost, Qt 6)
+        run: cargo test --release -- --ignored
