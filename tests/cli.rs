@@ -312,10 +312,10 @@ fn examples_build_and_pass_their_tests() {
 
 /// Build the actual executables with no generated files or discovery cache.
 #[test]
-#[ignore = "requires Qt 6 development packages"]
+#[ignore = "requires Qt 6 and KDE Frameworks 6 development packages"]
 fn desktop_examples_build_from_source() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    for (example, executable) in [("qt-tasks", "tasks")] {
+    for (example, executable) in [("qt-tasks", "tasks"), ("kmines", "kmines")] {
         let p = Project::new(example);
         p.remove("src");
         let status = Command::new("cp")

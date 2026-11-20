@@ -331,8 +331,8 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
     let _ = writeln!(w, "add_executable({name} {})", list(sources));
     let _ = writeln!(
         w,
-        "target_include_directories({name} PRIVATE {})",
-        format!("{} ${{CMAKE_CURRENT_BINARY_DIR}}", crate::project::LIBS_DIR)
+        "target_include_directories({name} PRIVATE {} ${{CMAKE_CURRENT_BINARY_DIR}})",
+        crate::project::LIBS_DIR
     );
     let _ = writeln!(
         w,
