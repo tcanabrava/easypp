@@ -21,7 +21,7 @@ project_root/
 easypp new hello && cd hello
 easypp run                # build and run (pick one with `easypp run <name>`)
 easypp test               # build and run src/tests: in parallel, 60 s limit each
-easypp debug [name]       # build and start a program or test under gdb/lldb
+easypp debug [name]       # build and start a program or test under lldb
 easypp fmt [--check]      # format with clang-format (--check: report only)
 easypp lint                # check for common bugs with clang-tidy
 easypp export-cmake       # write a CMakeLists.txt that builds the same way

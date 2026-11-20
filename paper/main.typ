@@ -295,8 +295,8 @@ but defined nowhere, defined with a different signature, or a class member or
 destructor without a body. It may be a C function called from C++ without
 `extern "C"`, or a function from a library whose header is not included.
 
-*Debugging, formatting, linting.* `easypp debug` starts a program under gdb or
-lldb with sanitizer errors set to abort, so the debugger stops at the faulty
+*Debugging, formatting, linting.* `easypp debug` starts a program under lldb,
+LLVM's debugger, with sanitizer errors set to abort, so the debugger stops at the faulty
 access. `easypp fmt` formats with clang-format, and `easypp lint` runs clang-tidy
 with checks that find real bugs (use after move, unchecked conversions,
 exceptions escaping) without style nagging.

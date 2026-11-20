@@ -29,7 +29,7 @@ Commands:
   init                  Create the project layout in the current folder
   build                 Build all libraries and executables
   run [name] [-- args]  Build and run an executable from src/bin
-  debug [name] [-- args] Build and start a program or test under gdb/lldb
+  debug [name] [-- args] Build and start a program or test under lldb
   test [filter]         Build and run the programs in src/tests
   fmt [--check]         Format the project's code (clang-format)
   lint                  Check the code for common bugs (clang-tidy)
@@ -305,23 +305,24 @@ fn pick_target<'a>(
     }
 }
 
-/// Builds the program and starts it under gdb (or lldb). Sanitizer errors
-/// abort, so the debugger stops right where the bug is.
+/// Builds the program and starts it under lldb, LLVM's debugger, matching the
+/// clang toolchain (gdb only when lldb is missing). Sanitizer errors abort, so
+/// the debugger stops right where the bug is.
 fn debug_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {
     let target = pick_target(project, cli, true)?;
     builder::build(project, &cli.opts, &[target])?;
     let exe = project.root.join(builder::exe_path(&cli.opts, target));
 
-    let mut command = if system::in_path("gdb") {
-        let mut c = Command::new("gdb");
-        c.args(["-q", "--args"]).arg(&exe);
-        c
-    } else if system::in_path("lldb") {
+    let mut command = if system::in_path("lldb") {
         let mut c = Command::new("lldb");
         c.arg("--").arg(&exe);
         c
+    } else if system::in_path("gdb") {
+        let mut c = Command::new("gdb");
+        c.args(["-q", "--args"]).arg(&exe);
+        c
     } else {
-        return Err("no debugger found: install gdb or lldb".into());
+        return Err("no debugger found: install lldb (it comes with LLVM)".into());
     };
     ui::status(
         "Debugging",
