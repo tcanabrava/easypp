@@ -18,17 +18,17 @@ constexpr int well_y = 20;
 constexpr int panel_x = well_x + board_width * cell + 24;
 constexpr int preview_cell = 18;
 
-constexpr SDL_Color background{22, 24, 31, 255};
-constexpr SDL_Color well{14, 15, 20, 255};
-constexpr SDL_Color grid_line{30, 32, 41, 255};
-constexpr SDL_Color label{120, 126, 150, 255};
-constexpr SDL_Color value{236, 238, 245, 255};
+constexpr SDL_Color background {22, 24, 31, 255};
+constexpr SDL_Color well {14, 15, 20, 255};
+constexpr SDL_Color grid_line {30, 32, 41, 255};
+constexpr SDL_Color label {120, 126, 150, 255};
+constexpr SDL_Color value {236, 238, 245, 255};
 
 // One colour per shape.
 constexpr std::array<SDL_Color, shape_count> palette = {{
     {239, 131, 110, 255}, // I: coral
     {126, 214, 184, 255}, // O: mint
-    {240, 200, 96, 255},  // T: gold
+    {240, 200, 96, 255}, // T: gold
     {112, 178, 236, 255}, // S: sky
     {190, 150, 230, 255}, // Z: lilac
     {246, 176, 140, 255}, // J: peach
@@ -43,20 +43,20 @@ SDL_Color color_of(Shape shape)
 SDL_Color scaled(SDL_Color c, int percent)
 {
     auto f = [percent](Uint8 v) { return static_cast<Uint8>(std::min(255, v * percent / 100)); };
-    return SDL_Color{f(c.r), f(c.g), f(c.b), c.a};
+    return SDL_Color {f(c.r), f(c.g), f(c.b), c.a};
 }
 
 void fill(SDL_Renderer* r, int x, int y, int w, int h, SDL_Color c)
 {
     SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
-    const SDL_Rect rect{x, y, w, h};
+    const SDL_Rect rect {x, y, w, h};
     SDL_RenderFillRect(r, &rect);
 }
 
 void outline(SDL_Renderer* r, int x, int y, int w, int h, SDL_Color c)
 {
     SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
-    const SDL_Rect rect{x, y, w, h};
+    const SDL_Rect rect {x, y, w, h};
     SDL_RenderDrawRect(r, &rect);
 }
 
@@ -101,7 +101,7 @@ void stat(SDL_Renderer* r, int y, const char* name, int number)
 
 void banner(SDL_Renderer* r, const char* title, const char* hint)
 {
-    fill(r, well_x, well_y, board_width * cell, board_height * cell, SDL_Color{0, 0, 0, 170});
+    fill(r, well_x, well_y, board_width * cell, board_height * cell, SDL_Color {0, 0, 0, 170});
     const int center = well_x + board_width * cell / 2;
     const int y = well_y + board_height * cell / 2 - 40;
     pixelfont::draw_text(r, center - pixelfont::text_width(title, 5) / 2, y, 5, title, value);

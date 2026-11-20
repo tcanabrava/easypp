@@ -33,7 +33,7 @@ public:
     void set(int x, int y, std::optional<Shape> value);
 
 private:
-    std::array<std::optional<Shape>, board_width * board_height> grid_{};
+    std::array<std::optional<Shape>, board_width * board_height> grid_ {};
 };
 
 }

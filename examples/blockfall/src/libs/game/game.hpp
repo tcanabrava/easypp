@@ -47,7 +47,7 @@ private:
     Bag bag_;
     Board board_;
     std::deque<Shape> queue_;
-    Piece current_{};
+    Piece current_ {};
     std::optional<Shape> held_;
     bool can_hold_ = true;
 

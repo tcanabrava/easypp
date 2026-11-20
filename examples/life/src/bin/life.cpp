@@ -28,8 +28,8 @@ constexpr int board_width = 200;
 constexpr int board_height = 130;
 
 struct App {
-    life::Simulation simulation{board_width, board_height};
-    life::Grid frame{board_width, board_height}; // what the window shows
+    life::Simulation simulation {board_width, board_height};
+    life::Grid frame {board_width, board_height}; // what the window shows
     GtkWidget* window = nullptr;
     GtkWidget* area = nullptr;
     GtkWidget* status = nullptr;
@@ -41,7 +41,7 @@ struct App {
 
 std::uint32_t fresh_seed()
 {
-    return std::random_device{}();
+    return std::random_device {}();
 }
 
 void load_start(life::Simulation& simulation, std::uint32_t seed)
@@ -65,10 +65,10 @@ void update_status(App& app)
 {
     char text[200];
     std::snprintf(text, sizeof text,
-                  "generation %llu   ·   population %d   ·   %.0f gen/s   ·   OpenMP threads %d   ·   "
-                  "simulation on its own std::thread (%s)",
-                  static_cast<unsigned long long>(app.simulation.generation()), app.frame.population(),
-                  app.simulation.measured_rate(), life::threads(), app.simulation.running() ? "running" : "paused");
+        "generation %llu   ·   population %d   ·   %.0f gen/s   ·   OpenMP threads %d   ·   "
+        "simulation on its own std::thread (%s)",
+        static_cast<unsigned long long>(app.simulation.generation()), app.frame.population(),
+        app.simulation.measured_rate(), life::threads(), app.simulation.running() ? "running" : "paused");
     gtk_label_set_text(GTK_LABEL(app.status), text);
     gtk_button_set_label(GTK_BUTTON(app.play), app.simulation.running() ? "Pause" : "Play");
 }
@@ -158,13 +158,24 @@ gboolean on_key(GtkEventControllerKey*, guint key, guint, GdkModifierType, gpoin
 {
     auto* app = static_cast<App*>(data);
     switch (key) {
-    case GDK_KEY_space: toggle_running(*app); return TRUE;
+    case GDK_KEY_space:
+        toggle_running(*app);
+        return TRUE;
     case GDK_KEY_s:
-    case GDK_KEY_Right: on_step(nullptr, app); return TRUE;
-    case GDK_KEY_r: on_random(nullptr, app); return TRUE;
-    case GDK_KEY_c: on_clear(nullptr, app); return TRUE;
-    case GDK_KEY_g: on_gun(nullptr, app); return TRUE;
-    default: return FALSE;
+    case GDK_KEY_Right:
+        on_step(nullptr, app);
+        return TRUE;
+    case GDK_KEY_r:
+        on_random(nullptr, app);
+        return TRUE;
+    case GDK_KEY_c:
+        on_clear(nullptr, app);
+        return TRUE;
+    case GDK_KEY_g:
+        on_gun(nullptr, app);
+        return TRUE;
+    default:
+        return FALSE;
     }
 }
 
@@ -196,11 +207,10 @@ gboolean finish_smoke(gpointer data)
     auto* app = static_cast<App*>(data);
     app->simulation.read(app->frame);
     std::printf("smoke test: %llu generations at %.0f gen/s, population %d, %d OpenMP threads\n",
-                static_cast<unsigned long long>(app->simulation.generation()), app->simulation.measured_rate(),
-                app->frame.population(), life::threads());
+        static_cast<unsigned long long>(app->simulation.generation()), app->simulation.measured_rate(),
+        app->frame.population(), life::threads());
     if (app->screenshot != nullptr) {
-        std::printf("%s %s\n", save_window(app->window, app->screenshot) ? "saved" : "could not save",
-                    app->screenshot);
+        std::printf("%s %s\n", save_window(app->window, app->screenshot) ? "saved" : "could not save", app->screenshot);
     }
     gtk_window_destroy(GTK_WINDOW(app->window));
     return G_SOURCE_REMOVE;
@@ -291,8 +301,8 @@ int headless(long generations, const char* png)
     life::Grid grid(board_width, board_height);
     simulation.read(grid);
     std::printf("headless: %llu generations in %.3f s (%.0f gen/s), population %d, %d OpenMP threads\n",
-                static_cast<unsigned long long>(simulation.generation()), seconds,
-                static_cast<double>(simulation.generation()) / seconds, grid.population(), life::threads());
+        static_cast<unsigned long long>(simulation.generation()), seconds,
+        static_cast<double>(simulation.generation()) / seconds, grid.population(), life::threads());
     if (png != nullptr) {
         const bool ok = life::view::save_png(grid, board_width * 5, board_height * 5, png);
         std::printf("%s %s\n", ok ? "saved" : "could not save", png);

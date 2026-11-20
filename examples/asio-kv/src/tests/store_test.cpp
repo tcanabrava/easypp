@@ -13,7 +13,7 @@ int main()
     store.set("a", "1");
     store.set("a", "\"one\"");
     CHECK(store.get("a") == "\"one\"");
-    CHECK((store.keys() == std::vector<std::string>{"a", "b"}));
+    CHECK((store.keys() == std::vector<std::string> {"a", "b"}));
     CHECK(store.erase("a"));
     CHECK(!store.erase("a"));
     CHECK(store.size() == 1);

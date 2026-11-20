@@ -27,8 +27,8 @@ std::uint32_t fresh_seed()
 
 void save_screenshot(SDL_Renderer* renderer, const char* path)
 {
-    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, blockfall::window_width, blockfall::window_height, 32,
-                                                          SDL_PIXELFORMAT_ARGB8888);
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(
+        0, blockfall::window_width, blockfall::window_height, 32, SDL_PIXELFORMAT_ARGB8888);
     if (surface == nullptr) {
         return;
     }
@@ -61,17 +61,32 @@ void press(blockfall::Game& game, bool& paused, bool& running, SDL_Keycode key)
         return;
     }
     switch (key) {
-    case SDLK_LEFT: game.handle(Input::Left); break;
-    case SDLK_RIGHT: game.handle(Input::Right); break;
-    case SDLK_DOWN: game.handle(Input::SoftDrop); break;
-    case SDLK_SPACE: game.handle(Input::HardDrop); break;
+    case SDLK_LEFT:
+        game.handle(Input::Left);
+        break;
+    case SDLK_RIGHT:
+        game.handle(Input::Right);
+        break;
+    case SDLK_DOWN:
+        game.handle(Input::SoftDrop);
+        break;
+    case SDLK_SPACE:
+        game.handle(Input::HardDrop);
+        break;
     case SDLK_UP:
-    case SDLK_x: game.handle(Input::RotateCw); break;
-    case SDLK_z: game.handle(Input::RotateCcw); break;
+    case SDLK_x:
+        game.handle(Input::RotateCw);
+        break;
+    case SDLK_z:
+        game.handle(Input::RotateCcw);
+        break;
     case SDLK_c:
     case SDLK_LSHIFT:
-    case SDLK_RSHIFT: game.handle(Input::Hold); break;
-    default: break;
+    case SDLK_RSHIFT:
+        game.handle(Input::Hold);
+        break;
+    default:
+        break;
     }
 }
 
@@ -97,7 +112,7 @@ int main(int argc, char* argv[])
         return 1;
     }
     SDL_Window* window = SDL_CreateWindow("Blockfall", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                          blockfall::window_width, blockfall::window_height, 0);
+        blockfall::window_width, blockfall::window_height, 0);
     if (window == nullptr) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         SDL_Quit();
@@ -113,7 +128,7 @@ int main(int argc, char* argv[])
         SDL_Quit();
         return 1;
     }
-    SDL_RendererInfo info{};
+    SDL_RendererInfo info {};
     SDL_GetRendererInfo(renderer, &info);
     const bool vsync = (info.flags & SDL_RENDERER_PRESENTVSYNC) != 0;
 
@@ -132,7 +147,7 @@ int main(int argc, char* argv[])
             } else if (event.type == SDL_KEYDOWN) {
                 press(game, paused, running, event.key.keysym.sym);
             } else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_FOCUS_LOST && !demo
-                       && !game.over()) {
+                && !game.over()) {
                 paused = true;
             }
         }

@@ -91,7 +91,7 @@ void Simulation::loop()
     auto next_tick = Clock::now();
     auto window_start = Clock::now();
     std::uint64_t window_generations = 0;
-    std::uint64_t seen_edits = ~std::uint64_t{0};
+    std::uint64_t seen_edits = ~std::uint64_t {0};
 
     while (!quit_) {
         if (!running_ && pending_steps_ == 0) {

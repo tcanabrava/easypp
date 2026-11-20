@@ -36,7 +36,7 @@ Shape Game::take_next()
 
 void Game::spawn(Shape shape)
 {
-    current_ = Piece{shape, 0, spawn_x, 0};
+    current_ = Piece {shape, 0, spawn_x, 0};
     gravity_timer_ = 0;
     lock_timer_ = 0;
     lock_resets_ = 0;

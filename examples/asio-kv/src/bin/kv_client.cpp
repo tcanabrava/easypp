@@ -44,11 +44,9 @@ std::vector<std::string> words_of(const std::string& line)
 int main(int argc, char* argv[])
 {
     po::options_description options("kv_client options");
-    options.add_options()
-        ("help,h", "show this help")
-        ("host", po::value<std::string>()->default_value("127.0.0.1"), "server address")
-        ("port,p", po::value<unsigned short>()->default_value(5555), "server port")
-        ("command", po::value<std::vector<std::string>>(), "set KEY VALUE | get KEY | del KEY | keys | size");
+    options.add_options()("help,h", "show this help")("host", po::value<std::string>()->default_value("127.0.0.1"),
+        "server address")("port,p", po::value<unsigned short>()->default_value(5555), "server port")(
+        "command", po::value<std::vector<std::string>>(), "set KEY VALUE | get KEY | del KEY | keys | size");
     po::positional_options_description positional;
     positional.add("command", -1);
 
@@ -84,7 +82,7 @@ int main(int argc, char* argv[])
 
     try {
         for (const std::string& reply :
-             kv::request(args["host"].as<std::string>(), args["port"].as<unsigned short>(), requests)) {
+            kv::request(args["host"].as<std::string>(), args["port"].as<unsigned short>(), requests)) {
             std::cout << reply << '\n';
         }
     } catch (const boost::system::system_error& e) {

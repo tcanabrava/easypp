@@ -37,7 +37,7 @@ int main(int argc, char* argv[])
         tasks.setDone(1, true);
         QTimer::singleShot(static_cast<int>(smoke * 1000), &app, [&] {
             std::printf("smoke test: %d tasks, %d left, about text %s\n", tasks.count(), tasks.remaining(),
-                        MainWindow::aboutText().isEmpty() ? "MISSING" : "loaded from resources");
+                MainWindow::aboutText().isEmpty() ? "MISSING" : "loaded from resources");
             if (screenshot != nullptr) {
                 std::printf("%s %s\n", window.grab().save(screenshot) ? "saved" : "could not save", screenshot);
             }

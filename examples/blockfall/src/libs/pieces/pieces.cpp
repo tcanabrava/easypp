@@ -31,7 +31,7 @@ std::array<Cell, 4> cells(Shape shape, int rotation)
     const int turns = ((rotation % 4) + 4) % 4;
     for (int t = 0; t < turns; ++t) {
         for (Cell& c : out) {
-            c = Cell{def.box - 1 - c.y, c.x}; // 90 degrees clockwise
+            c = Cell {def.box - 1 - c.y, c.x}; // 90 degrees clockwise
         }
     }
     return out;

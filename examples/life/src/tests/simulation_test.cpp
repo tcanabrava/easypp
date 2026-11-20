@@ -10,8 +10,7 @@ using namespace std::chrono_literals;
 
 namespace {
 
-template <typename Condition>
-bool eventually(Condition condition)
+template <typename Condition> bool eventually(Condition condition)
 {
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     while (std::chrono::steady_clock::now() < deadline) {

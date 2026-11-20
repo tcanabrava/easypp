@@ -32,7 +32,7 @@ void TaskList::add(const QString& title)
     if (trimmed.isEmpty()) {
         return;
     }
-    tasks_.append(Task{trimmed, false});
+    tasks_.append(Task {trimmed, false});
     emit changed();
 }
 
@@ -66,7 +66,7 @@ QByteArray TaskList::toJson() const
 {
     QJsonArray array;
     for (const Task& task : tasks_) {
-        array.append(QJsonObject{{"title", task.title}, {"done", task.done}});
+        array.append(QJsonObject {{"title", task.title}, {"done", task.done}});
     }
     return QJsonDocument(array).toJson(QJsonDocument::Compact);
 }
@@ -83,7 +83,7 @@ bool TaskList::fromJson(const QByteArray& json)
         if (!object.value("title").isString()) {
             return false;
         }
-        loaded.append(Task{object.value("title").toString(), object.value("done").toBool()});
+        loaded.append(Task {object.value("title").toString(), object.value("done").toBool()});
     }
     tasks_ = loaded;
     emit changed();

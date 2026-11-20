@@ -10,7 +10,7 @@ int main()
     // Each round of seven has every shape exactly once.
     Bag bag(1234);
     for (int round = 0; round < 50; ++round) {
-        std::array<int, shape_count> seen{};
+        std::array<int, shape_count> seen {};
         for (int i = 0; i < shape_count; ++i) {
             ++seen[static_cast<int>(bag.next())];
         }

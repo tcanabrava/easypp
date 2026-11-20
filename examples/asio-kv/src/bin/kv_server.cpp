@@ -18,11 +18,10 @@ namespace po = boost::program_options;
 int main(int argc, char* argv[])
 {
     po::options_description options("kv_server options");
-    options.add_options()
-        ("help,h", "show this help")
-        ("port,p", po::value<unsigned short>()->default_value(5555), "TCP port (0 = any free port)")
-        ("threads,t", po::value<int>()->default_value(static_cast<int>(std::thread::hardware_concurrency())),
-         "threads running the Asio io_context");
+    options.add_options()("help,h", "show this help")(
+        "port,p", po::value<unsigned short>()->default_value(5555), "TCP port (0 = any free port)")("threads,t",
+        po::value<int>()->default_value(static_cast<int>(std::thread::hardware_concurrency())),
+        "threads running the Asio io_context");
 
     po::variables_map args;
     try {

@@ -11,7 +11,7 @@
 namespace life::view {
 
 struct Layout {
-    double cell;     // side of one cell, in pixels
+    double cell; // side of one cell, in pixels
     double origin_x; // top-left corner of the board
     double origin_y;
 };

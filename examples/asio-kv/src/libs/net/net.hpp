@@ -34,7 +34,6 @@ private:
 };
 
 // Connects, sends each line, and returns one reply line per request.
-std::vector<std::string> request(const std::string& host, unsigned short port,
-                                 const std::vector<std::string>& lines);
+std::vector<std::string> request(const std::string& host, unsigned short port, const std::vector<std::string>& lines);
 
 }

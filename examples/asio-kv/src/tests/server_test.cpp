@@ -19,7 +19,7 @@ int main()
 
     constexpr int clients = 16;
     constexpr int keys_per_client = 50;
-    std::atomic<int> good_replies{0};
+    std::atomic<int> good_replies {0};
     std::vector<std::thread> threads;
     for (int c = 0; c < clients; ++c) {
         threads.emplace_back([&, c] {

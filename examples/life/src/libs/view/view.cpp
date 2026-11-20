@@ -7,9 +7,9 @@ namespace life::view {
 
 Layout fit(const Grid& grid, int width, int height)
 {
-    const double cell = std::max(1.0, std::floor(std::min(static_cast<double>(width) / grid.width(),
-                                                           static_cast<double>(height) / grid.height())));
-    return Layout{cell, (width - cell * grid.width()) / 2.0, (height - cell * grid.height()) / 2.0};
+    const double cell = std::max(1.0,
+        std::floor(std::min(static_cast<double>(width) / grid.width(), static_cast<double>(height) / grid.height())));
+    return Layout {cell, (width - cell * grid.width()) / 2.0, (height - cell * grid.height()) / 2.0};
 }
 
 void draw(cairo_t* cr, const Grid& grid, int width, int height)
@@ -30,7 +30,7 @@ void draw(cairo_t* cr, const Grid& grid, int width, int height)
         for (int x = 0; x < grid.width(); ++x) {
             if (grid.alive(x, y)) {
                 cairo_rectangle(cr, layout.origin_x + x * layout.cell, layout.origin_y + y * layout.cell,
-                                layout.cell - gap, layout.cell - gap);
+                    layout.cell - gap, layout.cell - gap);
             }
         }
     }

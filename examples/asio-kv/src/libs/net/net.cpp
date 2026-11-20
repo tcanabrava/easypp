@@ -20,8 +20,8 @@ asio::awaitable<void> session(tcp::socket socket, Store& store)
     std::string buffer;
     try {
         for (;;) {
-            const std::size_t n =
-                co_await asio::async_read_until(socket, asio::dynamic_buffer(buffer), '\n', asio::use_awaitable);
+            const std::size_t n
+                = co_await asio::async_read_until(socket, asio::dynamic_buffer(buffer), '\n', asio::use_awaitable);
             std::string line = buffer.substr(0, n - 1);
             buffer.erase(0, n);
             if (!line.empty() && line.back() == '\r') {
@@ -109,8 +109,7 @@ void Server::stop()
     impl_->stop();
 }
 
-std::vector<std::string> request(const std::string& host, unsigned short port,
-                                 const std::vector<std::string>& lines)
+std::vector<std::string> request(const std::string& host, unsigned short port, const std::vector<std::string>& lines)
 {
     asio::io_context io;
     tcp::resolver resolver(io);

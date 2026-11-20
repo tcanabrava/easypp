@@ -1,0 +1,6 @@
+BasedOnStyle: WebKit
+NamespaceIndentation: None
+Cpp11BracedListStyle: true
+ColumnLimit: 120
+AllowShortFunctionsOnASingleLine: Inline
+InsertBraces: true
