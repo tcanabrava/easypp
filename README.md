@@ -24,6 +24,7 @@ easypp test               # build and run src/tests: in parallel, 60 s limit eac
 easypp debug [name]       # build and start a program or test under gdb/lldb
 easypp fmt [--check]      # format with clang-format (--check: report only)
 easypp lint                # check for common bugs with clang-tidy
+easypp export-cmake       # write a CMakeLists.txt that builds the same way
 easypp build --release    # -O2 -DNDEBUG instead of -O0 -g
 easypp info               # what was discovered, and what links to what
 easypp clean
@@ -90,6 +91,11 @@ easypp clean
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.
+- **Moving on to CMake**: `easypp export-cmake` writes a CMakeLists.txt in
+  which every folder is the target it was: libraries with their links and
+  include paths, programs, CTest tests with the same timeout, pkg-config
+  packages, OpenMP, Qt 6 (AUTOMOC/AUTOUIC/AUTORCC), the same warnings and the
+  debug sanitizers. All the examples build and pass their tests with it.
 - **Formatting and linting**: `easypp fmt` formats the project's own code
   (WebKit-like: four spaces, braces on every body, 120 columns) and
   `easypp lint` runs clang-tidy with checks that find real bugs (use after move,

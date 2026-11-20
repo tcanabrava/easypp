@@ -1,6 +1,7 @@
 mod builder;
 mod cache;
 mod cond;
+mod export;
 mod hints;
 mod project;
 mod qt;
@@ -32,6 +33,7 @@ Commands:
   fmt [--check]         Format the project's code (clang-format)
   lint                  Check the code for common bugs (clang-tidy)
   info                  Show what was discovered and what links to what
+  export-cmake [--force] Write a CMakeLists.txt that builds the same way
   watch                 Keep compile_commands.json (and Qt's generated files)
                         up to date as src/ changes (also: --watch)
   clean                 Remove the build/ folder
@@ -66,6 +68,8 @@ struct Cli {
     timeout: Duration,
     /// `easypp fmt --check`: report instead of rewriting.
     check: bool,
+    /// `easypp export-cmake --force`: replace an existing CMakeLists.txt.
+    force: bool,
 }
 
 fn parse(args: Vec<String>) -> Result<Cli, String> {
@@ -82,6 +86,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
 
     let mut timeout = Duration::from_secs(60);
     let mut check = false;
+    let mut force = false;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -95,6 +100,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
             "--no-cache" => opts.cache = false,
             "--no-sanitize" => opts.sanitize = false,
             "--check" => check = true,
+            "--force" => force = true,
             "-h" | "--help" => command = Some("help".to_string()),
             "-V" | "--version" => command = Some("version".to_string()),
             "--timeout" => {
@@ -125,6 +131,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
         opts,
         timeout,
         check,
+        force,
     })
 }
 
@@ -169,7 +176,8 @@ fn run() -> Result<ExitCode, String> {
             ui::status("Created", "project layout in the current folder");
             return Ok(ExitCode::SUCCESS);
         }
-        "build" | "run" | "debug" | "test" | "info" | "clean" | "watch" | "fmt" | "lint" => {}
+        "build" | "run" | "debug" | "test" | "info" | "clean" | "watch" | "fmt" | "lint"
+        | "export-cmake" => {}
         other => return Err(format!("unknown command '{other}' (see `easypp --help`)")),
     }
 
@@ -208,6 +216,14 @@ fn run() -> Result<ExitCode, String> {
         }
         "run" => run_bin(&project, &cli, &invoked_from),
         "debug" => debug_bin(&project, &cli, &invoked_from),
+        "export-cmake" => {
+            export::write(&project, cli.force)?;
+            ui::status("Wrote", "CMakeLists.txt");
+            eprintln!(
+                "\n    cmake -S . -B build-cmake -G Ninja && cmake --build build-cmake && ctest --test-dir build-cmake\n"
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         "lint" => Ok(if tools::lint(&project, &cli.opts)? {
             ExitCode::SUCCESS
         } else {
