@@ -40,7 +40,11 @@ easypp clean
   (quoted includes are found next to the including file). Writing a bare
   `"lib1_header.hpp"` elsewhere gets a warning naming the right form. Each
   `src/thirdparty/<x>/` folder (or its `include/` sub-folder) goes on with
-  `-isystem`, so warnings from third-party code don't break the build. The
+  `-isystem`, so warnings from third-party code don't break the build. A
+  third-party folder with `.c`/`.cpp` files (in it or its `src/`) is compiled
+  into a library, in the GNU dialect and without warnings, and linked into
+  whatever includes its headers; files defining `main()` and folders such as
+  `examples/` or `tests/` are left out. The
   system's default include and library folders are used as usual.
 - **System libraries** (Linux): `#include` a system header and easypp
   links the library that provides it. It checks these rules in order:

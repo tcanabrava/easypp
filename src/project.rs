@@ -55,6 +55,8 @@ pub struct Library {
     pub closure: Vec<String>,
     /// Files for moc, uic and rcc.
     pub qt: QtFiles,
+    /// A folder in src/thirdparty with sources: compiled without -Werror.
+    pub third_party: bool,
 }
 
 impl Library {
@@ -154,20 +156,53 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
                 cflags: Vec::new(),
                 closure: Vec::new(),
                 qt: QtFiles::default(),
+                third_party: false,
             },
         );
     }
 
-    // Third-party: each folder (or its include/ sub-folder) is a system include path.
+    // Third-party: each folder (or its include/ sub-folder) is a system include
+    // path, and each folder is a library: header-only, or compiled from the
+    // sources in it or its src/ (see thirdparty_files).
     let mut system_includes = Vec::new();
     let thirdparty = Path::new(THIRDPARTY_DIR);
     if thirdparty.is_dir() {
         system_includes.push(thirdparty.to_path_buf());
         for entry in sorted_entries(thirdparty) {
-            if entry.is_dir() {
-                let include = entry.join("include");
-                system_includes.push(if include.is_dir() { include } else { entry });
+            if !entry.is_dir() {
+                continue;
             }
+            let include = entry.join("include");
+            system_includes.push(if include.is_dir() {
+                include
+            } else {
+                entry.clone()
+            });
+
+            let name = file_name(&entry);
+            if libs.contains_key(&name) {
+                return Err(format!(
+                    "src/libs/{name} and src/thirdparty/{name} have the same name; rename one"
+                ));
+            }
+            let sources = thirdparty_files(&entry)
+                .into_iter()
+                .filter(|f| Lang::of(f).is_some())
+                .collect();
+            libs.insert(
+                name.clone(),
+                Library {
+                    name,
+                    dir: entry,
+                    sources,
+                    deps: BTreeSet::new(),
+                    system: BTreeSet::new(),
+                    cflags: Vec::new(),
+                    closure: Vec::new(),
+                    qt: QtFiles::default(),
+                    third_party: true,
+                },
+            );
         }
     }
 
@@ -179,7 +214,16 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
     };
 
     for lib in libs.values_mut() {
-        let files = walk(&lib.dir);
+        if lib.third_party {
+            // Example programs and command-line tools (sqlite's shell.c) have
+            // their own main(); they are not part of the library.
+            lib.sources.retain(|s| !resolver.defines_main(s));
+        }
+        let files = if lib.third_party {
+            thirdparty_files(&lib.dir)
+        } else {
+            walk(&lib.dir)
+        };
         let scan = resolver.scan(files.clone(), Some(&lib.name));
         lib.deps = scan.libs;
         lib.system = scan
@@ -439,6 +483,18 @@ impl Resolver {
         None
     }
 
+    /// True if `file` defines `main()`.
+    fn defines_main(&self, file: &Path) -> bool {
+        let canonical = fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+        self.index
+            .borrow_mut()
+            .includes(&canonical, |text| {
+                includes(text).into_iter().map(String::from).collect()
+            })
+            .iter()
+            .any(|i| i == DEFINES_MAIN)
+    }
+
     /// The library that has `include` as a file, when it was written without
     /// the library's folder.
     fn library_with_file(&self, include: &str) -> Option<&str> {
@@ -491,6 +547,9 @@ impl Resolver {
                     if let Some(original) = own.get(&file) {
                         moc.push(original.clone());
                     }
+                    continue;
+                }
+                if include == DEFINES_MAIN {
                     continue;
                 }
                 if include == MACRO_INCLUDE {
@@ -551,6 +610,31 @@ struct Scan {
 /// What `includes()` reports for `#include SOME_MACRO`, which cannot be followed.
 pub const MACRO_INCLUDE: &str = "#include macro";
 
+/// What `includes()` reports for a file that defines `main()`.
+pub const DEFINES_MAIN: &str = "#defines main";
+
+/// `int main(`, `int main (void)` or GNU style `main (` on its own line.
+fn defines_main(line: &str) -> bool {
+    let line = line.trim_start();
+    let line = line.strip_prefix("int").map_or(line, str::trim_start);
+    line.strip_prefix("main")
+        .is_some_and(|rest| rest.trim_start().starts_with('('))
+}
+
+/// The files of a third-party folder that belong to the library: those in the
+/// folder itself and in its include/, src/ and source/ sub-folders. Examples,
+/// tests, platform backends and docs in other sub-folders are left out.
+fn thirdparty_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = sorted_entries(dir)
+        .into_iter()
+        .filter(|p| p.is_file())
+        .collect();
+    for sub in ["include", "src", "source"] {
+        files.extend(walk(&dir.join(sub)));
+    }
+    files
+}
+
 /// Extracts the targets of `#include "..."` and `#include <...>` lines,
 /// skipping blocks that are certainly off on this platform (`#ifdef _WIN32`,
 /// `#if 0`; see [`crate::cond`]). Also reports, once per file each: a
@@ -558,7 +642,7 @@ pub const MACRO_INCLUDE: &str = "#include macro";
 /// [`qt::MOC_MARKER`], and `#include MACRO` as [`MACRO_INCLUDE`].
 fn includes(text: &str) -> Vec<&str> {
     let mut conditions = Conditions::default();
-    let (mut openmp, mut moc, mut macro_include) = (false, false, false);
+    let (mut openmp, mut moc, mut macro_include, mut main) = (false, false, false, false);
     let mut out: Vec<&str> = Vec::new();
     for line in text.lines() {
         let directive = line.trim_start().strip_prefix('#').map(str::trim_start);
@@ -572,6 +656,7 @@ fn includes(text: &str) -> Vec<&str> {
         }
         let Some(directive) = directive else {
             moc = moc || qt::needs_moc(line);
+            main = main || defines_main(line);
             continue;
         };
         if let Some(pragma) = directive.strip_prefix("pragma")
@@ -606,6 +691,9 @@ fn includes(text: &str) -> Vec<&str> {
     }
     if macro_include {
         out.push(MACRO_INCLUDE);
+    }
+    if main {
+        out.push(DEFINES_MAIN);
     }
     out
 }
@@ -666,6 +754,14 @@ mod tests {
                     #endif\n#if 0\n#include \"old.hpp\"\n#endif\n#if defined(HAVE_X)\n#include <x.h>\n\
                     #endif\n#include CONFIG_HEADER\n#endif\n";
         assert_eq!(includes(text), vec!["unistd.h", "x.h", MACRO_INCLUDE]);
+    }
+
+    #[test]
+    fn reports_main() {
+        assert!(includes("int main(int argc, char** argv)\n{").contains(&DEFINES_MAIN));
+        assert!(includes("int main (void) {").contains(&DEFINES_MAIN));
+        assert!(includes("static int\nmain (int argc)\n").contains(&DEFINES_MAIN));
+        assert!(!includes("int mainloop(void);\n// int main()\n").contains(&DEFINES_MAIN));
     }
 
     #[test]

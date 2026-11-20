@@ -654,15 +654,21 @@ fn compile_command(
     system_cflags: &[String],
 ) -> Vec<String> {
     let lang = Lang::of(src).expect("only sources are compiled");
-    let mut cmd: Vec<String> = vec![
-        driver(lang).into(),
-        match lang {
-            Lang::C => C_STD,
-            Lang::Cpp => CPP_STD,
-        }
-        .into(),
-    ];
-    cmd.extend(WARNINGS.map(String::from));
+    // Third-party code is not the student's: the GNU dialect (it often relies on
+    // extensions) and no warnings, so it can never break a -Werror build.
+    let third_party = src.starts_with("src/thirdparty");
+    let std = match (lang, third_party) {
+        (Lang::C, false) => C_STD,
+        (Lang::Cpp, false) => CPP_STD,
+        (Lang::C, true) => "-std=gnu17",
+        (Lang::Cpp, true) => "-std=gnu++23",
+    };
+    let mut cmd: Vec<String> = vec![driver(lang).into(), std.into()];
+    if third_party {
+        cmd.push("-w".into());
+    } else {
+        cmd.extend(WARNINGS.map(String::from));
+    }
     if opts.release {
         cmd.extend(["-O2".into(), "-DNDEBUG".into()]);
     } else {
@@ -677,7 +683,9 @@ fn compile_command(
     }
     cmd.extend(system_cflags.iter().cloned());
     cmd.extend([
-        "-MMD".into(),
+        // -MD, not -MMD: -MMD leaves out headers found through -isystem, so
+        // editing a src/thirdparty header would not rebuild its users.
+        "-MD".into(),
         "-MP".into(),
         "-MF".into(),
         path_str(&depfile_path(obj)),
@@ -816,7 +824,7 @@ fn up_to_date(output: &Path, cmd: &[String], inputs: &[PathBuf]) -> bool {
     inputs.iter().all(|i| mtime(i).is_some_and(|m| m <= built))
 }
 
-/// Parses a Makefile-style depfile written by `clang -MMD -MP`.
+/// Parses a Makefile-style depfile written by `clang -MD -MP`.
 fn depfile_inputs(path: &Path) -> Option<Vec<PathBuf>> {
     let text = fs::read_to_string(path)
         .ok()?
@@ -843,6 +851,9 @@ fn depfile_inputs(path: &Path) -> Option<Vec<PathBuf>> {
         }
     }
     flush(&mut current, &mut out);
+    // Project, third-party and generated files are relative; system headers
+    // (/usr/include/...) are absolute and not worth a stat on every build.
+    out.retain(|p| p.is_relative());
     Some(out)
 }
 

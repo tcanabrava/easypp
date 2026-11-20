@@ -27,7 +27,7 @@ use std::time::UNIX_EPOCH;
 use turso::{Connection, Database, Value};
 
 /// Bump when the tables below change; older caches are recreated.
-const SCHEMA_VERSION: &str = "4"; // 2: `#pragma omp`; 3: Q_OBJECT; 4: #if-aware lists, macro includes
+const SCHEMA_VERSION: &str = "5"; // 2: omp; 3: Q_OBJECT; 4: #if, macro includes; 5: main()
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

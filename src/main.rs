@@ -352,10 +352,11 @@ fn print_info(project: &Project) {
     }
     for name in &project.lib_order {
         let lib = &project.libs[name];
-        let kind = if lib.has_objects() {
-            format!("{} source file(s)", lib.sources.len())
-        } else {
-            "header-only".into()
+        let kind = match (lib.has_objects(), lib.third_party) {
+            (true, false) => format!("{} source file(s)", lib.sources.len()),
+            (true, true) => format!("third-party, {} source(s)", lib.sources.len()),
+            (false, false) => "header-only".into(),
+            (false, true) => "third-party, headers".into(),
         };
         let deps: Vec<String> = lib.deps.iter().cloned().collect();
         let sys: Vec<String> = lib.system.iter().map(|d| d.label()).collect();

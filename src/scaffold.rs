@@ -18,7 +18,11 @@ const FILES: &[(&str, &str)] = &[
          \n\
          Each folder (or its `include/` sub-folder, if it has one) is added as a\n\
          *system* include path, so warnings inside third-party headers do not\n\
-         break your `-Werror` build.\n",
+         break your `-Werror` build.\n\
+         \n\
+         A folder with .c/.cpp files (in the folder itself or in its src/) is\n\
+         compiled into a library, without warnings, and linked into whatever\n\
+         includes its headers. Files that define main() are skipped.\n",
     ),
     (
         "src/libs/greeting/greeting.hpp",

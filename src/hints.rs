@@ -122,6 +122,21 @@ fn undefined(symbol: &str, files: &[(PathBuf, String)]) -> String {
 
     let name = base_name(symbol);
 
+    // C++ looking for a C function: the C++ name has parameter types, the C
+    // definition does not. Classic when a C header lacks extern "C".
+    if symbol.contains('(')
+        && let Some((file, _)) = files
+            .iter()
+            .find(|(p, text)| p.extension().is_some_and(|e| e == "c") && defines(text, &name))
+    {
+        return format!(
+            "`{name}` is defined in C ({}), but C++ code calls it as a C++ function: \
+             wrap its declaration in the header in `extern \"C\" {{ ... }}` \
+             (inside `#ifdef __cplusplus`)",
+            file.display()
+        );
+    }
+
     // A member of a class declared in the project (in a header or a .cpp).
     if let Some(class) = class_name(symbol) {
         let declared: Vec<&Path> = files
@@ -280,10 +295,10 @@ fn defines(text: &str, name: &str) -> bool {
     })
 }
 
-/// The project's own files (not third-party), with their text.
+/// The project's files, third-party included, with their text.
 fn project_files(project: &Project) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
-    let mut stack: Vec<PathBuf> = ["src/libs", "src/bin", "src/tests"]
+    let mut stack: Vec<PathBuf> = ["src/libs", "src/bin", "src/tests", "src/thirdparty"]
         .iter()
         .map(|d| project.root.join(d))
         .collect();
@@ -349,6 +364,11 @@ mod tests {
         assert!(undefined("half(int)", &files).contains("not with exactly this name"));
         assert!(undefined("compress2", &files).contains("comes from a library"));
         assert!(undefined("main", &files).contains("no main() function"));
+        let c_files = vec![(
+            PathBuf::from("src/thirdparty/z/z.c"),
+            "int zsum(int a)\n{ return a; }\n".to_string(),
+        )];
+        assert!(undefined("zsum(int)", &c_files).contains("extern \"C\""));
         assert!(undefined("vtable for Shape", &files).contains("virtual function"));
 
         let classes = vec![(
