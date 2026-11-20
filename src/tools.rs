@@ -42,6 +42,33 @@ pub fn tidy_file() -> String {
     format!("Checks: '{TIDY_CHECKS}'\nHeaderFilterRegex: '{TIDY_HEADERS}'\n")
 }
 
+/// Keeps the warnings located in the project's own files (with their notes and
+/// code excerpts). The static analyzer can follow a path from the project's
+/// code into a system or third-party header and report it there; that is not
+/// something the student can fix.
+fn own_warnings(output: &str) -> (String, usize) {
+    let is_header = |line: &str| line.contains(": warning: ") || line.contains(": error: ");
+    let is_own = |line: &str| {
+        ["src/libs/", "src/bin/", "src/tests/"]
+            .iter()
+            .any(|p| line.starts_with(p))
+    };
+    let mut kept = String::new();
+    let mut count = 0;
+    let mut keeping = false;
+    for line in output.lines() {
+        if is_header(line) {
+            keeping = is_own(line);
+            count += usize::from(keeping);
+        }
+        if keeping {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    (kept, count)
+}
+
 /// The project's own C/C++ files (not third-party, not generated).
 fn own_files(root: &Path, sources_only: bool) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -184,8 +211,7 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
                     }
                     match command.arg(file).output() {
                         Ok(out) => {
-                            let text = String::from_utf8_lossy(&out.stdout);
-                            let count = text.lines().filter(|l| l.contains(": warning: ")).count();
+                            let (text, count) = own_warnings(&String::from_utf8_lossy(&out.stdout));
                             if count > 0 {
                                 eprint!("{text}");
                                 *warnings.lock().unwrap() += count;
@@ -212,4 +238,24 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
         ));
     }
     Ok(warnings == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_only_warnings_in_project_files() {
+        let output = "src/libs/a/a.cpp:3:5: warning: bad thing [check]\n    int x;\n    ^\n\
+                      /usr/include/boost/x.hpp:9:1: warning: analyzer path [clang-analyzer-x]\n    y;\n\
+                      src/libs/a/a.cpp:8:1: note: called from here\n\
+                      src/thirdparty/z/z.c:1:1: warning: theirs [check]\n";
+        let (text, count) = own_warnings(output);
+        assert_eq!(count, 1);
+        assert!(
+            text.contains("bad thing")
+                && !text.contains("analyzer path")
+                && !text.contains("theirs")
+        );
+    }
 }
