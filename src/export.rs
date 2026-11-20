@@ -20,6 +20,7 @@ pub fn write(project: &Project, force: bool) -> Result<(), String> {
 /// What a system dependency is called in CMake.
 fn cmake_dep(dep: &SysDep) -> String {
     match dep {
+        SysDep::Pkg(name) if crate::kde::is_native(name) => name.clone(),
         SysDep::Pkg(name) if name.starts_with("Qt6") => format!("Qt6::{}", &name[3..]),
         SysDep::Pkg(name) => format!("PkgConfig::{}", pkg_var(name)),
         SysDep::Lib { name, .. } => name.clone(),
@@ -76,17 +77,23 @@ fn cmake(project: &Project) -> String {
         .flat_map(|l| l.system.iter())
         .chain(targets.iter().flat_map(|t| t.system.iter()))
         .collect();
-    let qt: BTreeSet<String> = all_deps
+    let mut qt: BTreeSet<String> = all_deps
         .iter()
         .filter_map(|d| match d {
             SysDep::Pkg(n) if n.starts_with("Qt6") => Some(n[3..].to_string()),
             _ => None,
         })
         .collect();
+    if all_deps
+        .iter()
+        .any(|d| matches!(d, SysDep::Pkg(n) if crate::kde::is_native(n)))
+    {
+        qt.insert("Core".into());
+    }
     let pkgs: Vec<&String> = all_deps
         .iter()
         .filter_map(|d| match d {
-            SysDep::Pkg(n) if !n.starts_with("Qt6") => Some(n),
+            SysDep::Pkg(n) if !n.starts_with("Qt6") && !crate::kde::is_native(n) => Some(n),
             _ => None,
         })
         .collect();
@@ -180,6 +187,17 @@ fn cmake(project: &Project) -> String {
         );
     }
 
+    let native: BTreeSet<String> = all_deps
+        .iter()
+        .filter_map(|d| match d {
+            SysDep::Pkg(n) if crate::kde::is_native(n) => crate::kde::package_name(n),
+            _ => None,
+        })
+        .collect();
+    for package in native {
+        let _ = writeln!(w, "find_package({package} REQUIRED)");
+    }
+
     for name in &project.lib_order {
         library(w, project.libs.get(name).unwrap(), &lib_target);
     }
@@ -193,9 +211,29 @@ fn cmake(project: &Project) -> String {
     out
 }
 
+fn kconfig_sources(
+    w: &mut String,
+    files: &crate::qt::QtFiles,
+    name: &str,
+    sources: &mut Vec<String>,
+) {
+    if files.kconfig.is_empty() {
+        return;
+    }
+    let var = format!("EASYPP_KCONFIG_{}", pkg_var(name));
+    let _ = writeln!(w, "find_package(KF6Config REQUIRED)");
+    let _ = writeln!(
+        w,
+        "kconfig_add_kcfg_files({var} {})",
+        list(files.kconfig.iter().map(|p| path(p)))
+    );
+    sources.push(format!("${{{var}}}"));
+}
+
 fn library(w: &mut String, lib: &Library, names: &BTreeMap<&str, String>) {
     let target = &names[lib.name.as_str()];
     let mut sources: Vec<String> = lib.sources.iter().map(|s| path(s)).collect();
+    kconfig_sources(w, &lib.qt, target, &mut sources);
     // Listed so AUTOMOC/AUTOUIC see every Q_OBJECT header and .ui form.
     let moc_headers = lib
         .qt
@@ -243,13 +281,13 @@ fn library(w: &mut String, lib: &Library, names: &BTreeMap<&str, String>) {
         if lib.third_party {
             let _ = writeln!(
                 w,
-                "target_include_directories({target} SYSTEM PUBLIC {include_dir})"
+                "target_include_directories({target} SYSTEM PUBLIC {include_dir} ${{CMAKE_CURRENT_BINARY_DIR}})"
             );
             let _ = writeln!(w, "target_compile_options({target} PRIVATE -w)");
         } else {
             let _ = writeln!(
                 w,
-                "target_include_directories({target} PUBLIC {include_dir})"
+                "target_include_directories({target} PUBLIC {include_dir} ${{CMAKE_CURRENT_BINARY_DIR}})"
             );
             let _ = writeln!(
                 w,
@@ -265,6 +303,7 @@ fn library(w: &mut String, lib: &Library, names: &BTreeMap<&str, String>) {
 
 fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<&str, String>) {
     let mut sources: Vec<String> = target.sources.iter().map(|s| path(s)).collect();
+    kconfig_sources(w, &target.qt, &target.name, &mut sources);
     let moc_headers = target
         .qt
         .moc
@@ -293,7 +332,7 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
     let _ = writeln!(
         w,
         "target_include_directories({name} PRIVATE {})",
-        crate::project::LIBS_DIR
+        format!("{} ${{CMAKE_CURRENT_BINARY_DIR}}", crate::project::LIBS_DIR)
     );
     let _ = writeln!(
         w,

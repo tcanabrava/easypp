@@ -35,7 +35,7 @@ pub enum SysDep {
 
 /// Bump whenever the header-to-library rules change, so cached answers from
 /// older rules are thrown away (it is part of the fingerprint).
-const RULES_VERSION: u32 = 6; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
+const RULES_VERSION: u32 = 7; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
 
 /// What `includes()` reports for a `#pragma omp` line.
 pub const OPENMP_PRAGMA: &str = "#pragma omp";
@@ -168,6 +168,8 @@ impl Snapshot {
             pkg_config,
         };
         snapshot.load_packages();
+        let tracked = crate::kde::packages(&snapshot.lib_dirs, &mut snapshot.packages);
+        snapshot.pc_dirs.extend(tracked);
         snapshot
     }
 
@@ -462,7 +464,7 @@ impl System {
         if let Some(flags) = self.pkg_flags.borrow().get(name) {
             return flags.clone();
         }
-        let from_tool = self.snapshot.pkg_config.then(|| {
+        let from_tool = (self.snapshot.pkg_config && !crate::kde::is_native(name)).then(|| {
             let run = |what: &str| -> Result<Vec<String>, String> {
                 let out = Command::new("pkg-config")
                     .args([what, name])
@@ -592,7 +594,7 @@ fn push_pair(out: &mut Vec<String>, flag: &str, value: &str) {
     }
 }
 
-fn split_flags(s: &str) -> Vec<String> {
+pub(crate) fn split_flags(s: &str) -> Vec<String> {
     s.split_whitespace().map(String::from).collect()
 }
 

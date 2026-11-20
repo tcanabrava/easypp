@@ -1,0 +1,27 @@
+# KMines upstream dbb447ca171469a55a5efbadbcbb480331dc7a38
+# Effective lines exclude blank lines and full-line # comments; inline comments remain.
+file	physical	effective
+CMakeLists.txt	74	57
+cmake/InternalMacros.cmake	64	56
+data/CMakeLists.txt	15	12
+doc/CMakeLists.txt	4	1
+src/CMakeLists.txt	72	60
+themes/CMakeLists.txt	29	24
+TOTAL	258	210
+easypp project build files	0	0
+difference (easypp - upstream)	-258	-210
+# Excludes presets/CI/packaging; upstream CMake also covers installation, translations, documentation.
+# This is a build/launch adaptation, not installation feature parity.
+
+# Tool diff: physical added/deleted lines, including comments, blanks and unit tests.
+# Baseline: ee23bcbee7dfd37b2a46917599ac1d07abe29feb
+# main.rs excludes the pre-existing debugger preference/documentation changes.
+file	added	deleted	net
+src/builder.rs	5	1	4
+src/export.rs	44	5	39
+src/main.rs	20	1	19
+src/project.rs	14	0	14
+src/qt.rs	69	3	66
+src/system.rs	5	3	2
+src/kde.rs	308	0	308
+TOTAL TOOL	465	13	452

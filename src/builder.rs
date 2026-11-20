@@ -398,6 +398,7 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
         }
         for step in c.plan.ui.iter().chain(&c.plan.generate) {
             expected.insert(step.output.clone());
+            expected.extend(step.additional_outputs.iter().cloned());
         }
     }
     for (name, lib) in libs {
@@ -457,7 +458,10 @@ fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result
     let jobs = |steps: Vec<&qt::Step>| -> Vec<Job> {
         steps
             .into_iter()
-            .filter(|s| !up_to_date(&s.output, &s.cmd, &s.inputs))
+            .filter(|s| {
+                !up_to_date(&s.output, &s.cmd, &s.inputs)
+                    || s.additional_outputs.iter().any(|p| !p.is_file())
+            })
             .map(|s| Job {
                 verb: "Generating",
                 label: format!("{} {}", s.tool, s.input.display()),

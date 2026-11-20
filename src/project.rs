@@ -232,6 +232,9 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
             .filter_map(|i| system.resolve(i))
             .collect();
         lib.qt = QtFiles::from_files(&files, scan.moc);
+        if !lib.qt.kconfig.is_empty() {
+            lib.system.extend(system.resolve("KConfigSkeleton"));
+        }
     }
     let lib_order = topo_order(&libs)?;
 
@@ -274,6 +277,14 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         .chain(bins.iter().chain(&tests).map(|t| (t.name.as_str(), &t.qt)))
         .filter(|(_, q)| !q.is_empty())
         .collect();
+    for (_, files) in &needs_qt {
+        for config in &files.kconfig {
+            qt::kconfig_schema(config)?;
+            if crate::kde::config_compiler().is_none() {
+                return Err("KConfig generation needs kconfig_compiler_kf6 (install the KF6 Config development tools)".into());
+            }
+        }
+    }
     let qt_tools = match needs_qt.first() {
         None => None,
         Some((name, _)) => {
@@ -363,6 +374,9 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
                     system.push(dep);
                 }
             }
+        }
+        if !qt.kconfig.is_empty() {
+            system.extend(ctx.system.resolve("KConfigSkeleton"));
         }
         let cflags = ctx.system.compile_flags(&system.iter().cloned().collect());
         let link_flags = ctx.system.link_flags(&system);

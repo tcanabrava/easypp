@@ -1,0 +1,643 @@
+<?xml version="1.0" ?>
+<!DOCTYPE book PUBLIC "-//KDE//DTD DocBook XML V4.5-Based Variant V1.1//EN" "dtd/kdedbx45.dtd" [
+  <!ENTITY % addindex "IGNORE">
+  <!ENTITY % Russian "INCLUDE"
+> <!-- change language only here -->
+]>
+
+<book id="kmines" lang="&language;">
+
+<bookinfo>
+<title
+>Руководство пользователя &kmines;</title>
+
+<authorgroup>
+<author
+><firstname
+>Nicolas</firstname
+> <surname
+>Hadacek</surname
+> <affiliation
+> <address
+>&Nicolas.Hadacek.mail;</address>
+</affiliation>
+</author>
+<author
+><firstname
+>Michael</firstname
+> <surname
+>McBride</surname
+> <affiliation
+><address
+><email
+>mmcbride@ematic.org</email
+></address
+></affiliation>
+</author>
+<author
+><firstname
+>Anton</firstname
+> <surname
+>Brondz</surname
+> <affiliation
+> <address
+><email
+>dinolinux@gmail.com</email
+></address>
+</affiliation>
+</author>
+<othercredit role="developer"
+><firstname
+>Nicolas</firstname
+> <surname
+>Hadacek</surname
+> <affiliation
+> <address
+>&Nicolas.Hadacek.mail;</address>
+</affiliation>
+<contrib
+>Разработчик</contrib>
+</othercredit>
+<othercredit role="reviewer"
+><firstname
+>Lauri</firstname
+> <surname
+>Watts</surname
+> <affiliation
+><address
+>&Lauri.Watts.mail;</address
+></affiliation>
+<contrib
+>Редактор</contrib>
+</othercredit>
+<othercredit role="translator"
+><firstname
+>Михаил</firstname
+> <surname
+>Сибиряков</surname
+> <affiliation
+><address
+><email
+>dtldt@dt.ru</email
+></address
+> </affiliation
+><contrib
+>Перевод на русский</contrib
+></othercredit
+> 
+</authorgroup>
+
+<copyright>
+<year
+>2000</year>
+<holder
+>&Nicolas.Hadacek;, Michael McBride</holder>
+</copyright>
+
+<legalnotice
+>&FDLNotice;</legalnotice>
+
+<date
+>11 июля 2021 г.</date>
+<releaseinfo
+>4.0 (KDE Gear 21.04)</releaseinfo>
+
+<abstract
+><para
+>&kmines; - это версия классической игры Сапёр для &kde;.</para
+></abstract>
+
+<keywordset>
+<keyword
+>KDE</keyword>
+<keyword
+>игра</keyword>
+<keyword
+>Сапёр</keyword>
+</keywordset>
+
+</bookinfo>
+
+<chapter id="introduction">
+<title
+>Введение</title>
+<note
+><title
+>Тип игры:</title
+><para
+>Стратегия, настольная</para
+></note
+><!-- Game genre. Use as many as necessary. Available game types are: Arcade, Board, Card, Dice, Toys, Logic, Strategy.-->
+<note
+><title
+>Количество игроков:</title
+><para
+>Один</para
+></note
+><!--Number of possible players. It can be: One, Two,..., Multiplayer-->
+
+<para
+>&kmines; — классическая игра «Сапёр». Нужно открыть все клетки, не подорвавшись ни на одной мине. Если мина взрывается, игра заканчивается. Числа показывают, сколько мин находится рядом. </para>
+
+</chapter>
+
+<chapter id="how-to-play">
+<title
+>Правила игры</title>
+<note
+><title
+>Цель:</title
+><para
+>Найдите все мины, скрытые на минном поле.</para
+></note
+><!--Describe the objective of the game.-->
+
+<screenshot>
+<mediaobject>
+<imageobject>
+<imagedata fileref="gameboard.png" format="PNG"/>
+</imageobject>
+<textobject>
+<phrase
+>Игровое поле &kmines;</phrase>
+</textobject>
+</mediaobject>
+</screenshot>
+
+<para
+>Для игры в &kmines; нужна мышь с тремя кнопками: ими клетки открываются и помечаются флажками (на мыши с двумя кнопками нажатие <mousebutton
+>средней</mousebutton
+> кнопки мыши обычно заменяется одновременным нажатием <mousebutton
+>левой</mousebutton
+> кнопки мыши и <mousebutton
+>правой</mousebutton
+> кнопки мыши). </para>
+
+<para
+>Щелчок <mousebutton
+>левой</mousebutton
+> кнопкой мыши по клетке открывает её. Если там мина, она взорвётся, и игра закончится. Если под клеткой мины нет, клетка очищается, а если рядом нет других мин, клетка исчезнет вместе с соседними клетками без мин. Если рядом есть мины, появится число, показывающее, сколько соседних клеток содержат мины. У каждой клетки (кроме клеток на краю и в углу) восемь соседних клеток. </para>
+
+<note>
+<para
+>Щелчок <mousebutton
+>левой</mousebutton
+> кнопкой мыши по клетке с флажком безопасен и ничего не делает. </para>
+</note>
+
+<para
+><mousebutton
+>Правая</mousebutton
+> кнопка мыши помечает клетку как содержащую мину (устанавливая на неё красный флажок). Повторный щелчок этой кнопкой помечает клетку как неопределённую (устанавливая на неё вопросительный знак). Метка неопределённости бывает полезна, когда положение мин вызывает сомнения. <mousebutton
+>Средняя</mousebutton
+> кнопка мыши открывает окружающие клетки, если на них уже установлено нужное число флажков. Это очень удобно, поскольку намного быстрее, чем открывать каждую клетку по отдельности. Следите за тем, чтобы флажки были установлены правильно, иначе можно подорваться на мине. </para>
+</chapter>
+
+<chapter id="rulestips">
+<title
+>Правила игры, стратегия и советы</title>
+<sect1 id="rules">
+<title
+>Правила</title>
+<itemizedlist>
+<listitem
+><para
+>Чтобы выиграть игру, нужно обезвредить все мины.</para
+></listitem>
+<listitem
+><para
+>До окончания игры точное расположение мин игроку неизвестно.</para
+></listitem>
+<listitem
+><para
+>Если мина взорвётся, игра заканчивается.</para
+></listitem>
+<listitem
+><para
+>Числа показывают, сколько мин рядом.</para
+></listitem>
+</itemizedlist>
+</sect1>
+
+<sect1 id="strattips">
+<title
+>Стратегия и советы</title>
+<itemizedlist>
+<listitem
+><para
+>Используйте числа, чтобы определить, где находятся соседние мины.</para
+></listitem>
+<listitem
+><para
+>Ставьте флажки там, где предполагаете мины. Учтите: хотя при установке флажка показанное число мин уменьшается, под флажком мины может и не быть.</para
+></listitem>
+<listitem
+><para
+>Думайте, прежде чем щёлкать: неверный щелчок может взорвать мину.</para
+></listitem>
+<listitem
+><para
+>Если вы подозреваете, что в клетке мина, откройте клетки вокруг неё — появившиеся числа могут помочь.</para
+></listitem>
+<listitem
+><para
+>Старайтесь как можно быстрее очистить игровое поле: чем меньше времени потребуется, тем выше будет результат.</para
+></listitem>
+</itemizedlist>
+</sect1>
+
+</chapter>
+
+<chapter id="command">
+<title
+>Команды/сочетания клавиш</title>
+
+<para
+>В следующих разделах кратко описаны некоторые пункты меню.</para>
+
+<sect1 id="menu">
+<title
+>Пункты меню</title>
+
+<variablelist>
+<varlistentry>
+<term
+><menuchoice
+><shortcut
+> <keycombo action="simul"
+>&Ctrl;<keycap
+>N</keycap
+></keycombo
+> </shortcut
+> <guimenu
+>Игра</guimenu
+> <guimenuitem
+>Новая игра</guimenuitem
+> </menuchoice
+></term>
+<listitem
+><para
+>Начало новой игры.</para
+></listitem>
+</varlistentry>
+
+<varlistentry>
+<term
+><menuchoice
+><shortcut
+> <keycap
+>P</keycap
+> </shortcut
+> <guimenu
+>Игра</guimenu
+> <guimenuitem
+>Пауза</guimenuitem
+></menuchoice
+></term>
+<listitem>
+<para
+>Приостанавливает отсчёт игрового времени. Чтобы возобновить игру, выберите этот пункт меню ещё раз. Учтите, что при приостановке игры игровое поле исчезает: было бы нечестно, если бы можно было искать удачные ходы без ограничения времени. </para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term
+><menuchoice
+><shortcut
+> <keycombo action="simul"
+>&Ctrl;<keycap
+>H</keycap
+></keycombo
+> </shortcut
+> <guimenu
+>Игра</guimenu
+> <guimenuitem
+>Показать лучшие результаты</guimenuitem
+> </menuchoice
+></term>
+<listitem
+><para
+>Показывает лучшие результаты для каждого уровня сложности.</para
+></listitem>
+</varlistentry>
+
+<varlistentry>
+<term
+><menuchoice
+><shortcut
+> <keycombo action="simul"
+>&Ctrl;<keycap
+>Q</keycap
+></keycombo
+> </shortcut
+> <guimenu
+>Игра</guimenu
+> <guimenuitem
+>Выход</guimenuitem
+> </menuchoice
+></term>
+<listitem
+><para
+><action
+>Выход</action
+> из &kmines;.</para
+></listitem>
+</varlistentry>
+
+<varlistentry>
+<term
+><menuchoice
+><guimenu
+>Настройка</guimenu
+> <guisubmenu
+>Уровень сложности</guisubmenu
+> </menuchoice
+></term>
+<listitem>
+<para
+>Позволяет установить уровень сложности из подменю.</para>
+<para
+>По умолчанию есть три уровня сложности: <guimenuitem
+>Лёгкий</guimenuitem
+> (поле 9×9, 10 мин), <guimenuitem
+>Средний</guimenuitem
+> (16×16, 40 мин) и <guimenuitem
+>Трудный</guimenuitem
+> (30×16, 99 мин). Кроме того, есть уровень <guimenuitem
+>Своё минное поле</guimenuitem
+> с собственными параметрами.</para>
+<para
+>При выборе уровня <guimenuitem
+>Своё минное поле</guimenuitem
+> используются параметры, заданные в диалоге <guilabel
+>Настройка — &kmines;</guilabel
+>.</para
+></listitem>
+</varlistentry>
+
+</variablelist>
+
+<para
+>Кроме того, в &kmines; есть стандартные для &kde; меню <guimenu
+>Настройка</guimenu
+> и <guimenu
+>Справка</guimenu
+>, описанные в разделах <ulink url="help:/fundamentals/menus.html#menus-settings"
+>Меню «Настройка»</ulink
+> и <ulink url="help:/fundamentals/menus.html#menus-help"
+>Меню «Справка»</ulink
+> руководства «Основы &kde;». </para>
+
+</sect1>
+
+<sect1 id="keys"
+><title
+>Комбинации клавиш по умолчанию</title>
+<para
+>В этой таблице приведены комбинации клавиш по умолчанию.</para>
+
+<table>
+<title
+>Комбинации клавиш</title>
+<tgroup cols="2">
+<thead
+><row
+><entry
+>Комбинации клавиш</entry
+><entry
+>Действие</entry
+></row
+></thead>
+<tbody>
+<row
+><entry
+><keycombo action="simul"
+>&Ctrl;<keycap
+>N</keycap
+></keycombo
+></entry
+><entry
+>Новая игра</entry
+></row>
+<row
+><entry
+><keycap
+>P</keycap
+></entry
+><entry
+>Пауза</entry
+></row>
+<row
+><entry
+><keycombo action="simul"
+>&Ctrl;<keycap
+>Q</keycap
+></keycombo
+></entry
+><entry
+>Выход из &kmines;</entry
+></row>
+<row
+><entry
+><keycap
+>F1</keycap
+></entry
+><entry
+>Руководство пользователя &kmines;</entry
+></row>
+<row
+><entry
+><keycombo action="simul"
+>&Shift;<keycap
+>F1</keycap
+></keycombo
+></entry
+><entry
+>Контекстная подсказка</entry
+></row>
+<row
+><entry
+><keycombo action="simul"
+>&Ctrl;<keycap
+>H</keycap
+></keycombo
+></entry
+><entry
+>Показать лучшие результаты</entry
+></row>
+
+</tbody>
+</tgroup>
+</table>
+
+<para
+>Эти комбинации клавиш можно изменить с помощью пункта меню <menuchoice
+><guimenu
+>Настройка</guimenu
+> <guimenuitem
+>Настроить комбинации клавиш…</guimenuitem
+></menuchoice
+>.</para>
+
+</sect1>
+
+</chapter>
+
+<chapter id="faq">
+<title
+>Вопросы и ответы</title>
+<qandaset>
+
+<qandaentry>
+<question>
+<para
+>Можно ли изменить внешний вид игры? </para>
+</question>
+<answer>
+<para
+>Да, выберите пункт меню <menuchoice
+><guimenu
+>Настройка</guimenu
+> <guimenuitem
+>Настроить &kmines;…</guimenuitem
+></menuchoice
+>. </para>
+</answer>
+</qandaentry>
+
+<qandaentry>
+<question>
+<para
+>Можно ли увеличить число мин и клеток? </para>
+</question>
+<answer>
+<para
+>Да, проще всего — выбрать уровень в раскрывающемся списке в правом нижнем углу. </para>
+</answer>
+</qandaentry>
+
+</qandaset>
+</chapter>
+
+<chapter id="settings">
+<title
+>Параметры игры</title>
+<para
+>Параметры игры задаются в диалоге, который открывается пунктом меню <menuchoice
+><guimenu
+>Настройка</guimenu
+> <guimenuitem
+>Настроить &kmines;…</guimenuitem
+></menuchoice
+>. </para>
+<para
+>На странице <guilabel
+>Основное</guilabel
+> настраиваются следующие параметры игры. </para>
+<variablelist>
+    <varlistentry>
+        <term
+>Использовать пометку «?»</term>
+        <listitem>
+            <para
+>Если флажок установлен, клетки, в которых вы не уверены, можно помечать вопросительным знаком. Пометка переключается щелчком <mousebutton
+>правой</mousebutton
+> кнопкой мыши.</para>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term
+>Разрешить сброс &kmines;</term>
+        <listitem>
+            <para
+>Если флажок установлен, игру &kmines; можно сбросить, когда остаётся только угадывать, а последняя догадка оказалась неверной.</para>
+        </listitem>
+    </varlistentry>
+    <varlistentry>
+        <term
+>Отключать ведение счёта при сбросе</term>
+        <listitem>
+            <para
+>Если флажок установлен, после сброса игры очки не засчитываются.</para>
+        </listitem>
+    </varlistentry>
+        <varlistentry>
+        <term
+>Обследовать с помощью щелчка левой кнопкой по ячейкам с цифрами</term>
+        <listitem>
+            <para
+>Если флажок установлен, щелчок <mousebutton
+>левой</mousebutton
+> кнопкой мыши по клетке с числом даст тот же результат, что и щелчок <mousebutton
+>средней</mousebutton
+> кнопкой мыши.</para>
+        </listitem>
+    </varlistentry>
+</variablelist>
+
+<para
+>На второй странице выбирается тема оформления. Выберите тему в списке: слева от названия каждой темы показан небольшой образец. Выбор применяется сразу. </para>
+
+<para
+>На третьей странице задаются высота и ширина поля и количество мин для уровня <guimenuitem
+>Своё минное поле</guimenuitem
+>. </para>
+
+</chapter>
+
+<chapter id="credits"
+><title
+>Авторские права и лицензия</title>
+
+<para
+>&kmines; © 1996–2007 </para>
+
+<itemizedlist>
+<title
+>Авторы</title>
+<listitem>
+<para
+>&Nicolas.Hadacek; &Nicolas.Hadacek.mail; </para>
+</listitem>
+<listitem>
+<para
+>Mikhail Kourinny </para>
+</listitem>
+<listitem>
+<para
+>Mauricio Piacentini <email
+>mauricio@tabuleiro.com</email
+> </para>
+</listitem>
+<listitem>
+<para
+>Dmitry Suzdalev <email
+>dimsuz@gmail.com</email
+> </para>
+</listitem>
+</itemizedlist>
+
+<para
+>© &Nicolas.Hadacek; &Nicolas.Hadacek.mail;, 2000 (документация)</para>
+<para
+>Документация обновлена для &kde; 2.0: &Mike.McBride; &Mike.McBride.mail;</para>
+<para
+>Изменения для &kde; 3.2: &Philip.Rodrigues; &Philip.Rodrigues.mail;</para>
+<para
+>Перевод на русский - Михаил Сибиряков <email
+>dtldt@dt.ru</email
+></para
+> <para
+>Редактор перевода - Григорий Мохин <email
+>mok@kde.ru</email
+></para
+> &underFDL; &underGPL; </chapter>
+
+</book>
+<!--
+Local Variables:
+mode: sgml
+sgml-omittag: nil
+sgml-shorttag: t
+End:
+-->

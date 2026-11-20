@@ -91,6 +91,16 @@ easypp clean
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.
+- **KDE Frameworks 6**: installed KDE imported-target metadata supplies include
+  paths and public library dependencies when no pkg-config package is available.
+  This reads literal system export properties, without invoking CMake or requiring
+  a project build file. `.kcfgc` files are discovered beside sources: their `File=`
+  schema is passed to `kconfig_compiler_kf6`, generating `.h`/`.cpp` files before
+  moc and compilation. Schema/options edits and missing generated outputs trigger
+  regeneration. Generated files stay under `build/<profile>/gen/`.
+- **Runtime data**: put shared assets under `data/<application>/`.
+  `easypp run` and `easypp debug` prepend the project's `data/` to `XDG_DATA_DIRS`.
+  See `examples/kmines` for an imported KDE application using these conventions.
 - **Moving on to CMake**: `easypp export-cmake` writes a CMakeLists.txt in
   which every folder is the target it was: libraries with their links and
   include paths, programs, CTest tests with the same timeout, pkg-config

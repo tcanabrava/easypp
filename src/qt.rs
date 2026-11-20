@@ -36,6 +36,7 @@ pub struct QtFiles {
     pub moc: Vec<PathBuf>,
     pub ui: Vec<PathBuf>,
     pub qrc: Vec<PathBuf>,
+    pub kconfig: Vec<PathBuf>,
 }
 
 impl QtFiles {
@@ -51,16 +52,22 @@ impl QtFiles {
             moc,
             ui: with_ext("ui"),
             qrc: with_ext("qrc"),
+            kconfig: with_ext("kcfgc"),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.moc.is_empty() && self.ui.is_empty() && self.qrc.is_empty()
+        self.moc.is_empty() && self.ui.is_empty() && self.qrc.is_empty() && self.kconfig.is_empty()
     }
 
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
-        for (tool, files) in [("moc", &self.moc), ("uic", &self.ui), ("rcc", &self.qrc)] {
+        for (tool, files) in [
+            ("moc", &self.moc),
+            ("uic", &self.ui),
+            ("rcc", &self.qrc),
+            ("kconfig", &self.kconfig),
+        ] {
             if !files.is_empty() {
                 let names: Vec<String> = files
                     .iter()
@@ -83,7 +90,7 @@ pub struct QtTools {
 
 /// Only Qt 6 is supported.
 pub fn is_qt(dep: &SysDep) -> bool {
-    matches!(dep, SysDep::Pkg(name) if name.starts_with("Qt6"))
+    matches!(dep, SysDep::Pkg(name) if name.starts_with("Qt6") || crate::kde::is_native(name))
 }
 
 /// Qt 5 packages are ignored entirely when resolving headers.
@@ -137,6 +144,7 @@ pub struct Step {
     pub cmd: Vec<String>,
     /// Files whose change makes the output stale.
     pub inputs: Vec<PathBuf>,
+    pub additional_outputs: Vec<PathBuf>,
 }
 
 /// Everything generated for one component.
@@ -174,10 +182,46 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         let output = unique(format!("ui_{}", stem(ui)), ".h");
         plan.ui.push(Step {
             tool: "uic",
+            additional_outputs: vec![],
             cmd: vec![s(&tools.uic), s(ui), "-o".into(), s(&output)],
             input: ui.clone(),
             inputs: vec![ui.clone()],
             output,
+        });
+    }
+
+    for config in &files.kconfig {
+        let schema = kconfig_schema(config).expect("validated KConfig input");
+        let base = stem(config);
+        let output = gen_dir.join(format!("{base}.cpp"));
+        let header = gen_dir.join(format!("{base}.h"));
+        plan.sources.push(output.clone());
+        plan.ui.push(Step {
+            tool: "kconfig",
+            input: config.clone(),
+            cmd: vec![
+                s(&crate::kde::config_compiler().expect("validated KConfig compiler")),
+                s(&schema),
+                s(config),
+                "-d".into(),
+                s(gen_dir),
+            ],
+            inputs: vec![config.clone(), schema],
+            additional_outputs: vec![header.clone()],
+            output,
+        });
+        // KConfig includes this file itself when it generates a Q_OBJECT class.
+        let output = gen_dir.join(format!("moc_{base}.cpp"));
+        let mut cmd = vec![s(&tools.moc)];
+        cmd.extend(moc_flags.iter().cloned());
+        cmd.extend([s(&header), "-o".into(), s(&output)]);
+        plan.generate.push(Step {
+            tool: "moc",
+            input: header.clone(),
+            inputs: vec![header],
+            output,
+            cmd,
+            additional_outputs: vec![],
         });
     }
 
@@ -196,6 +240,7 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         }
         plan.generate.push(Step {
             tool: "moc",
+            additional_outputs: vec![],
             input: input.clone(),
             inputs: vec![input.clone()],
             output,
@@ -210,6 +255,7 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         plan.resources.push(output.clone());
         plan.generate.push(Step {
             tool: "rcc",
+            additional_outputs: vec![],
             cmd: vec![
                 s(&tools.rcc),
                 "--name".into(),
@@ -224,6 +270,25 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         });
     }
     plan
+}
+
+/// Resolve File= relative to the .kcfgc, as KConfig's build integration does.
+pub fn kconfig_schema(config: &Path) -> Result<PathBuf, String> {
+    let text = fs::read_to_string(config).map_err(|e| format!("{}: {e}", config.display()))?;
+    let file = text
+        .lines()
+        .filter_map(|l| l.trim().split_once('='))
+        .find_map(|(k, v)| (k.trim() == "File").then(|| v.trim()))
+        .ok_or_else(|| format!("{}: missing File= schema", config.display()))?;
+    let schema = config.parent().unwrap_or(Path::new(".")).join(file);
+    if !schema.is_file() {
+        return Err(format!(
+            "{}: KConfig schema {} does not exist",
+            config.display(),
+            schema.display()
+        ));
+    }
+    Ok(schema)
 }
 
 /// moc understands -I and -D but not -isystem.
@@ -295,6 +360,7 @@ mod tests {
             ],
             ui: vec!["a/window.ui".into()],
             qrc: vec![],
+            kconfig: vec![],
         };
         let plan = plan(&tools, &files, Path::new("gen"), &["-DX".into()]);
         assert_eq!(plan.ui[0].output, PathBuf::from("gen/ui_window.h"));

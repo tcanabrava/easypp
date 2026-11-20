@@ -3,6 +3,7 @@ mod cache;
 mod cond;
 mod export;
 mod hints;
+mod kde;
 mod project;
 mod qt;
 mod scaffold;
@@ -326,6 +327,7 @@ fn debug_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCo
         "Debugging",
         &builder::exe_path(&cli.opts, target).display().to_string(),
     );
+    runtime_data(&mut command, project);
     let status = command
         .args(&cli.passthrough)
         .current_dir(invoked_from)
@@ -338,6 +340,21 @@ fn debug_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCo
     Ok(exit_code(status))
 }
 
+/// data/ mirrors a shared-data installation prefix (e.g. data/kmines/themes).
+fn runtime_data(command: &mut Command, project: &Project) {
+    let data = project.root.join("data");
+    if data.is_dir() {
+        let mut paths = vec![data];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("XDG_DATA_DIRS")
+                .unwrap_or_else(|| "/usr/local/share:/usr/share".into()),
+        ));
+        if let Ok(value) = std::env::join_paths(paths) {
+            command.env("XDG_DATA_DIRS", value);
+        }
+    }
+}
+
 fn run_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode, String> {
     let target = pick_target(project, cli, false)?;
     builder::build(project, &cli.opts, &[target])?;
@@ -346,7 +363,9 @@ fn run_bin(project: &Project, cli: &Cli, invoked_from: &Path) -> Result<ExitCode
         "Running",
         &builder::exe_path(&cli.opts, target).display().to_string(),
     );
-    let status = Command::new(&exe)
+    let mut command = Command::new(&exe);
+    runtime_data(&mut command, project);
+    let status = command
         .args(&cli.passthrough)
         .current_dir(invoked_from)
         .status()

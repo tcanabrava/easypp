@@ -309,3 +309,44 @@ fn examples_build_and_pass_their_tests() {
         }
     }
 }
+
+/// Exercises real KConfig output, including its generated Q_OBJECT class,
+/// transitive library headers, schema edits and recovery of either output.
+#[test]
+#[ignore = "requires Qt6 and KDE Frameworks 6 development tools"]
+fn kde_kconfig_incremental_build() {
+    let p = Project::new("kconfig");
+    p.write(
+        "src/libs/prefs/options.kcfgc",
+        "File=options.kcfg\nClassName=Options\nSingleton=true\nGenerateProperties=true\n",
+    );
+    let schema = |n| {
+        format!(
+            r#"<?xml version="1.0"?><kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"><kcfgfile name="easypp-test"/><group name="General"><entry name="Count" type="Int"><default>{n}</default></entry></group></kcfg>"#
+        )
+    };
+    p.write("src/libs/prefs/options.kcfg", &schema(7));
+    p.write(
+        "src/libs/prefs/prefs.h",
+        "#pragma once\n#include \"options.h\"\nint count();\n",
+    );
+    p.write(
+        "src/libs/prefs/prefs.cpp",
+        "#include \"prefs.h\"\nint count() { return Options::count(); }\n",
+    );
+    p.write("src/bin/check.cpp", "#include <QCoreApplication>\n#include <cstdlib>\n#include \"prefs/prefs.h\"\nint main(int argc, char **argv) { QCoreApplication app(argc, argv); return count() == std::atoi(argv[1]) ? 0 : 1; }\n");
+    let first = p.ok(&["run", "check", "--", "7"]);
+    assert!(first.contains("kconfig"), "{first}");
+    assert!(!p.ok(&["build"]).contains("Generating"));
+    p.write("src/libs/prefs/options.kcfg", &schema(9));
+    assert!(p.ok(&["run", "check", "--", "9"]).contains("Generating"));
+    p.remove("build/debug/gen/libs/prefs/options.h");
+    assert!(p.ok(&["run", "check", "--", "9"]).contains("Generating"));
+    p.remove("build/debug/gen/libs/prefs/options.cpp");
+    assert!(p.ok(&["run", "check", "--", "9"]).contains("Generating"));
+    p.write(
+        "src/libs/prefs/options.kcfgc",
+        "File=missing.kcfg\nClassName=Options\n",
+    );
+    assert!(p.fails(&["build"]).contains("does not exist"));
+}

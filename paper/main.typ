@@ -74,7 +74,7 @@ multi-file program needs no build knowledge at all.
 
 This paper asks how far the same idea goes in C++. Our contributions are:
 
-+ #easypp, a build tool of about 5,500 lines of Rust whose only dependency is an
++ #easypp, a build tool of about 6,000 lines of Rust whose only dependency is an
   embedded database used as a build cache. It derives the
   whole build from a fixed folder layout and from the `#include` lines in the
   sources, including system libraries, OpenMP, Boost and Qt 6 code generation
@@ -222,6 +222,16 @@ run without configuration: a header or source with `Q_OBJECT` goes through moc, 
 `.ui` form through uic, and a `.qrc` resource file through rcc. A library's
 resources are linked straight into the programs that use it, because inside a
 static archive the linker would drop them. Qt 5 is not supported.
+
+*KDE Frameworks 6.* Some KDE libraries publish their dependency metadata only
+as installed CMake target exports. #easypp reads their literal include paths,
+compile definitions, library locations and public dependencies into the same
+header index used for pkg-config. It does not execute project CMake files.
+A `.kcfgc` file selects a KConfig schema through `File=`; the tool runs
+`kconfig_compiler_kf6` before moc and compilation, tracking both generated
+`.h` and `.cpp` outputs. This also covers generated classes requiring moc.
+For runtime assets, `data/<application>/` mirrors a shared-data installation;
+`run` and `debug` prepend `data/` to `XDG_DATA_DIRS`.
 
 == A per-project cache <sec-cache>
 
@@ -434,6 +444,57 @@ rebuild is on par with CMake's and Make's. Without the cache (`--no-cache`), the
 no-op rebuild takes about 0.10 s: the cost of asking clang for its search paths
 and parsing about 1,900 pkg-config files on every run.
 
+== An existing KDE application: KMines <sec-kmines>
+
+Blockfall was written for this evaluation. To test an existing application's
+requirements, we imported KDE's KMines at revision
+`dbb447ca171469a55a5efbadbcbb480331dc7a38` into `examples/kmines`.
+Its build exposed two missing capabilities: KDE library discovery without
+pkg-config metadata and KConfig code generation. Both were added to #easypp;
+there is no preparation script or replacement project build file.
+
+The source adaptation moves the executable into `src/bin/kmines` and themes into
+`data/kmines/themes`. Theme entries refer to the original SVG files instead of
+compressed build outputs. Version and logging declarations become ordinary
+source files; explicit header-moc includes are removed because #easypp compiles
+those outputs separately. A deprecated spinbox in the UI is replaced by
+`QSpinBox`; the form uses no plural suffix formatting.
+
+#figure(
+  table(
+    columns: (1fr, auto, auto),
+    align: (left, right, right),
+    table.header[*Project build description*][*Physical lines*][*Non-blank, non-comment*],
+    [Upstream: six CMake files], [258], [210],
+    [Adapted KMines: build files], [0], [0],
+    [Difference], [−258], [−210],
+  ),
+  caption: [KMines project build-file count at the pinned revision. Presets, CI and
+    packaging files are excluded. Counts and reproduction instructions:
+    `eval/kmines-lines.py` and `eval/kmines-lines.txt`.],
+) <tab-kmines-size>
+
+These lines move responsibility into the shared tool. The KDE implementation
+adds 465 and deletes 13 physical lines across seven Rust files: a net increase
+of 452, including unit tests. A further 41 lines add an end-to-end KConfig test.
+These implementation counts include blanks and comments and exclude pre-existing
+debugger edits; they use a different denominator from the effective build-file
+count in @tab-kmines-size.
+
+From a clean build directory, `easypp build` generates KConfig, moc, uic and rcc
+outputs and links KMines with the normal debug sanitizers. `easypp run` launches
+the game with its local themes. The KConfig regression test checks schema edits,
+no-op builds, recovery when either generated output is deleted, and a generated
+class requiring moc. An exported CMake project also builds.
+
+This is a build-and-launch case study, not an installation-equivalence claim.
+The upstream CMake files also handle installation, translations and
+documentation. Those features are not reproduced here, and the source changes
+above are part of the adaptation cost. The installed metadata reader supports
+literal properties, not arbitrary CMake code or generator expressions. One
+application demonstrates this path; it does not establish compatibility with
+KDE software in general.
+
 = Implications for teaching <sec-teaching>
 
 *Teach the concepts, not the tool's syntax.* Sweller's cognitive-load account
@@ -496,7 +557,7 @@ serious limitation for teaching, since many students use Windows. Code::Blocks, 
 distributed for Windows with a bundled MinGW compiler @codeblocks. It does not download packages:
 system libraries must be installed, and third-party code must be copied into
 `src/thirdparty`. It has no per-target flags, code generation other than Qt's
-(moc, uic, rcc), install step, shared libraries or C++20 modules. Modules would break the include-based discovery. These are not
+(moc, uic, rcc) and KDE KConfig, install step, shared libraries or C++20 modules. Modules would break the include-based discovery. These are not
 oversights: each one would add a configuration surface. But they put a clear limit
 on where the tool can be used.
 
@@ -508,7 +569,9 @@ evaluates only conditions it can decide and cannot follow macro includes. The ca
 times, so a header added inside an existing sub-folder, without any library
 folder changing, is not noticed until the next `easypp clean`.
 
-*Measurements.* The comparison uses one project, and its build files were written
+*Measurements.* The controlled comparison uses Blockfall; KMines is an additional
+build-and-launch case study, with source adaptation and a narrower scope than
+its upstream installation build. The comparative build files were written
 by the author of the tool being evaluated. We tried to write the shortest
 idiomatic version for each tool and publish them so others can improve them. Line
 counts measure the size of what must be written, not how hard it is to learn. The
@@ -539,7 +602,7 @@ and no build file let a course spend its time on C++.
 
 #v(1em)
 *Availability.* #easypp, its end-to-end tests, the examples (Blockfall with SDL2,
-Life with GTK 4 and OpenMP, a Boost.Asio server, a Qt 6 application), the build
+Life with GTK 4 and OpenMP, a Boost.Asio server, a Qt 6 application, and the adapted KDE KMines), the build
 files for the other tools and the evaluation script are in the same repository
 as this paper (`src/`, `tests/`, `examples/`, `paper/eval/`).
 
