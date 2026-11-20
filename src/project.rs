@@ -351,8 +351,17 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
         let own = scan.external.iter().filter_map(|i| ctx.system.resolve(i));
         let from_libs = libs.iter().flat_map(|l| ctx.libs[l].system.iter().cloned());
         for dep in own.chain(from_libs) {
-            if !system.contains(&dep) {
-                system.push(dep);
+            // A GoogleTest/Catch2 test without its own main() gets the
+            // framework's (gtest_main, catch2-with-main).
+            let deps = if scan.defines_main {
+                vec![dep]
+            } else {
+                ctx.system.with_main(&dep)
+            };
+            for dep in deps {
+                if !system.contains(&dep) {
+                    system.push(dep);
+                }
             }
         }
         let cflags = ctx.system.compile_flags(&system.iter().cloned().collect());
@@ -537,6 +546,7 @@ impl Resolver {
         // The component's own files, to report which of them need moc.
         let own: HashMap<PathBuf, PathBuf> = work.iter().cloned().zip(files).collect();
         let mut moc = Vec::new();
+        let mut defines_main = false;
 
         while let Some(file) = work.pop() {
             let file_includes = self.index.borrow_mut().includes(&file, |text| {
@@ -550,6 +560,7 @@ impl Resolver {
                     continue;
                 }
                 if include == DEFINES_MAIN {
+                    defines_main = defines_main || own.contains_key(&file);
                     continue;
                 }
                 if include == MACRO_INCLUDE {
@@ -593,6 +604,7 @@ impl Resolver {
             libs: found,
             external,
             moc,
+            defines_main,
         }
     }
 }
@@ -605,6 +617,8 @@ struct Scan {
     external: BTreeSet<String>,
     /// Its own files that need moc.
     moc: Vec<PathBuf>,
+    /// One of its own files defines main().
+    defines_main: bool,
 }
 
 /// What `includes()` reports for `#include SOME_MACRO`, which cannot be followed.

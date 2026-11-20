@@ -339,6 +339,36 @@ impl System {
             .map(|(p, _)| SysDep::Pkg(p.name.clone()))
     }
 
+    /// For a program without main(): a test framework's variant that provides
+    /// one (gtest -> gtest_main, catch2 -> catch2-with-main); otherwise `dep`.
+    pub fn with_main(&self, dep: &SysDep) -> Vec<SysDep> {
+        let main_of = |name: &str| match name {
+            "gtest" => Some("gtest_main"),
+            "gmock" => Some("gmock_main"),
+            "catch2" | "Catch2" => Some("catch2-with-main"),
+            _ => None,
+        };
+        match dep {
+            SysDep::Pkg(name) => match main_of(name).and_then(|m| {
+                self.by_name
+                    .get(&normalize(m))
+                    .map(|&i| &self.snapshot.packages[i])
+            }) {
+                Some(package) => vec![SysDep::Pkg(package.name.clone())],
+                None => vec![dep.clone()],
+            },
+            // No pkg-config file: libgtest_main.so next to libgtest.so.
+            SysDep::Lib { name, dir } if matches!(name.as_str(), "gtest" | "gmock") => vec![
+                SysDep::Lib {
+                    name: format!("{name}_main"),
+                    dir: dir.clone(),
+                },
+                dep.clone(),
+            ],
+            _ => vec![dep.clone()],
+        }
+    }
+
     /// `<QtWidgets/QPushButton>` or `<QtWidgets>` -> Qt6Widgets.
     /// Every Qt package lists the shared `include/qt6` folder, so the generic
     /// rules cannot tell the modules apart.

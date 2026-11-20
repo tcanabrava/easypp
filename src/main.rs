@@ -6,6 +6,7 @@ mod project;
 mod qt;
 mod scaffold;
 mod system;
+mod testrun;
 mod ui;
 mod watch;
 
@@ -13,7 +14,7 @@ use builder::Options;
 use project::{Project, Target};
 use std::path::Path;
 use std::process::{Command, ExitCode};
-use std::time::Instant;
+use std::time::Duration;
 
 const USAGE: &str = "\
 easypp: build small C and C++ projects with zero configuration
@@ -34,7 +35,8 @@ Commands:
 Options:
   -r, --release         Optimized build (-O2 -DNDEBUG) instead of debug
                         (-O0 -g, with AddressSanitizer and UBSan)
-  -j, --jobs <N>        Parallel compile jobs (default: number of CPUs)
+  -j, --jobs <N>        Parallel compile jobs and tests (default: number of CPUs)
+      --timeout <SECS>  Time limit for each test (default: 60)
   -v, --verbose         Print every compiler command
       --no-cache        Ignore build/easypp.db (detect and scan everything)
       --no-sanitize     Debug builds without AddressSanitizer/UBSan
@@ -56,6 +58,8 @@ struct Cli {
     positional: Vec<String>,
     passthrough: Vec<String>,
     opts: Options,
+    /// Per test, for `easypp test`.
+    timeout: Duration,
 }
 
 fn parse(args: Vec<String>) -> Result<Cli, String> {
@@ -70,6 +74,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
         sanitize: true,
     };
 
+    let mut timeout = Duration::from_secs(60);
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -84,6 +89,15 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
             "--no-sanitize" => opts.sanitize = false,
             "-h" | "--help" => command = Some("help".to_string()),
             "-V" | "--version" => command = Some("version".to_string()),
+            "--timeout" => {
+                let value = it.next().ok_or("--timeout needs a number of seconds")?;
+                timeout = value
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|s| *s > 0)
+                    .map(Duration::from_secs)
+                    .ok_or(format!("invalid timeout '{value}'"))?;
+            }
             "-j" | "--jobs" => {
                 let value = it.next().ok_or("-j needs a number")?;
                 opts.jobs = parse_jobs(&value)?;
@@ -101,6 +115,7 @@ fn parse(args: Vec<String>) -> Result<Cli, String> {
         positional,
         passthrough,
         opts,
+        timeout,
     })
 }
 
@@ -270,63 +285,25 @@ fn run_tests(project: &Project, cli: &Cli) -> Result<ExitCode, String> {
     }
 
     builder::build(project, &cli.opts, &tests)?;
-    eprintln!(
-        "\nrunning {} test{}",
-        tests.len(),
-        if tests.len() == 1 { "" } else { "s" }
-    );
-
-    let mut failed = Vec::new();
-    let start = Instant::now();
-    for test in &tests {
-        let exe = project.root.join(builder::exe_path(&cli.opts, test));
-        let output = Command::new(&exe)
-            .args(&cli.passthrough)
-            .output()
-            .map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
-        if output.status.success() {
-            eprintln!("test {} ... {}", test.name, ui::green("ok"));
-        } else {
-            eprintln!("test {} ... {}", test.name, ui::red("FAILED"));
-            failed.push((test.name.as_str(), output));
-        }
-    }
-
-    for (name, output) in &failed {
-        eprintln!("\n---- {name} ({}) ----", describe(output.status));
-        eprint!("{}", String::from_utf8_lossy(&output.stdout));
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-    let result = if failed.is_empty() {
-        ui::green("ok")
-    } else {
-        ui::red("FAILED")
-    };
-    eprintln!(
-        "\ntest result: {result}. {} passed; {} failed; finished in {:.2}s",
-        tests.len() - failed.len(),
-        failed.len(),
-        start.elapsed().as_secs_f64()
-    );
-    Ok(if failed.is_empty() {
+    let tests: Vec<testrun::Test> = tests
+        .iter()
+        .map(|t| testrun::Test {
+            name: t.name.clone(),
+            exe: project.root.join(builder::exe_path(&cli.opts, t)),
+        })
+        .collect();
+    let passed = testrun::run(
+        &tests,
+        &cli.passthrough,
+        &project.root,
+        cli.opts.jobs,
+        cli.timeout,
+    )?;
+    Ok(if passed {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     })
-}
-
-fn describe(status: std::process::ExitStatus) -> String {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(signal) = status.signal() {
-            return format!("killed by signal {signal}");
-        }
-    }
-    match status.code() {
-        Some(code) => format!("exit code {code}"),
-        None => "abnormal exit".into(),
-    }
 }
 
 fn exit_code(status: std::process::ExitStatus) -> ExitCode {

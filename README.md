@@ -20,7 +20,7 @@ project_root/
 ```sh
 easypp new hello && cd hello
 easypp run                # build and run (pick one with `easypp run <name>`)
-easypp test               # build and run every program in src/tests
+easypp test               # build and run src/tests: in parallel, 60 s limit each
 easypp build --release    # -O2 -DNDEBUG instead of -O0 -g
 easypp info               # what was discovered, and what links to what
 easypp clean
@@ -87,6 +87,11 @@ easypp clean
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
   The flags are always `-Wall -pedantic -Werror`.
+- **Tests**: each program in `src/tests` is a test that passes when it exits
+  with 0. Tests run in parallel (`-j`), each with a time limit (`--timeout`,
+  60 s by default), and only failing tests show their output. GoogleTest and
+  Catch2 work out of the box: a test that includes them without defining
+  `main()` is linked with `gtest_main` or `catch2-with-main`.
 - **Errors explained**: after a compiler or linker error, easypp adds `help:`
   lines in plain language. A missing header gets the right `"library/header"`
   form, a note that Qt 5 is unsupported, or this distribution's command to find
