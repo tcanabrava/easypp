@@ -35,7 +35,7 @@ pub enum SysDep {
 
 /// Bump whenever the header-to-library rules change, so cached answers from
 /// older rules are thrown away (it is part of the fingerprint).
-const RULES_VERSION: u32 = 8; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
+const RULES_VERSION: u32 = 9; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
 
 /// What `includes()` reports for a `#pragma omp` line.
 pub const OPENMP_PRAGMA: &str = "#pragma omp";
@@ -43,6 +43,7 @@ pub const OPENMP_PRAGMA: &str = "#pragma omp";
 impl SysDep {
     pub fn label(&self) -> String {
         match self {
+            SysDep::Pkg(name) if crate::conan::provides(name) => format!("{name} (Conan)"),
             SysDep::Pkg(name) => name.clone(),
             SysDep::OpenMp => "openmp".into(),
             SysDep::Lib { name, dir: None } => format!("-l{name}"),
@@ -114,6 +115,7 @@ pub struct System {
     snapshot: Snapshot,
     default_lib_dirs: HashSet<PathBuf>,
     by_name: HashMap<String, usize>,
+    conan_packages: Vec<usize>,
     resolved: RefCell<HashMap<String, Option<SysDep>>>,
     pkg_flags: RefCell<HashMap<String, Flags>>,
 }
@@ -178,7 +180,7 @@ impl Snapshot {
     pub fn fingerprint(&self) -> String {
         let mut parts = vec![
             format!("easypp {} rules {RULES_VERSION}", env!("CARGO_PKG_VERSION")),
-            format!("PKG_CONFIG_PATH={:?}", std::env::var_os("PKG_CONFIG_PATH")),
+            format!("PKG_CONFIG_PATH={:?}", pkg_config_paths()),
         ];
         for program in ["clang", "clang++", "pkg-config"] {
             let path = find_in_path(program);
@@ -192,13 +194,14 @@ impl Snapshot {
         for dir in dirs {
             parts.push(format!("{} {}", dir.display(), stamp(Some(dir))));
         }
+        for file in crate::conan::metadata_files() {
+            parts.push(format!("{} {}", file.display(), stamp(Some(&file))));
+        }
         parts.join("\n")
     }
 
     fn load_packages(&mut self) {
-        let mut dirs: Vec<PathBuf> = std::env::var_os("PKG_CONFIG_PATH")
-            .map(|p| std::env::split_paths(&p).collect())
-            .unwrap_or_default();
+        let mut dirs = pkg_config_paths();
         match self
             .pkg_config
             .then(|| capture("pkg-config", &["--variable", "pc_path", "pkg-config"]))
@@ -254,10 +257,16 @@ impl System {
                 by_name.entry(normalize(&package.name)).or_insert(i);
             }
         }
+        let conan_packages = crate::conan::metadata_files()
+            .iter()
+            .filter_map(|path| path.file_stem()?.to_str())
+            .filter_map(|name| by_name.get(&normalize(name)).copied())
+            .collect();
         System {
             default_lib_dirs: snapshot.default_lib_dirs.iter().cloned().collect(),
             snapshot,
             by_name,
+            conan_packages,
             resolved: RefCell::new(resolved),
             pkg_flags: RefCell::new(pkg_flags),
         }
@@ -306,6 +315,27 @@ impl System {
                 name: name.into(),
                 dir: None,
             });
+        }
+
+        // Prefer a selected Conan package that actually ships this header.
+        // This also covers headers that have a system copy under /usr/include.
+        let mut conan_matches = self
+            .conan_packages
+            .iter()
+            .map(|&i| &self.snapshot.packages[i])
+            .filter(|p| p.include_dirs.iter().any(|dir| dir.join(include).is_file()));
+        if let Some(first) = conan_matches.next() {
+            // Components such as gtest and gmock can share an include directory.
+            let names: Vec<_> = candidates(include)
+                .iter()
+                .map(|name| normalize(name))
+                .collect();
+            let rank = |p: &Package| names.iter().position(|name| *name == normalize(&p.name));
+            let package = std::iter::once(first)
+                .chain(conan_matches)
+                .min_by_key(|p| rank(p).unwrap_or(usize::MAX))
+                .unwrap();
+            return Some(SysDep::Pkg(package.name.clone()));
         }
 
         // In the compiler's default folders: guess the library from the header's name.
@@ -453,7 +483,20 @@ impl System {
         let mut all = vec!["-Wl,--as-needed".to_string()];
         for dep in deps {
             match dep {
-                SysDep::Pkg(name) => all.extend(self.flags_for(name).1),
+                SysDep::Pkg(name) => {
+                    let flags = self.flags_for(name).1;
+                    if crate::conan::provides(name) {
+                        // RPATH also covers indirect shared libraries in Conan's cache.
+                        all.extend(
+                            flags
+                                .iter()
+                                .filter_map(|f| f.strip_prefix("-L"))
+                                .filter(|d| Path::new(d).is_absolute())
+                                .map(|d| format!("-Wl,--disable-new-dtags,-rpath,{d}")),
+                        );
+                    }
+                    all.extend(flags);
+                }
                 SysDep::Lib { name, dir } => {
                     if let Some(dir) = dir {
                         all.push(format!("-L{}", dir.display()));
@@ -473,7 +516,7 @@ impl System {
         }
         let from_tool = (self.snapshot.pkg_config && !crate::kde::is_native(name)).then(|| {
             let run = |what: &str| -> Result<Vec<String>, String> {
-                let out = Command::new("pkg-config")
+                let out = pkg_config_command()
                     .args([what, name])
                     .stdin(Stdio::null())
                     .output()
@@ -611,7 +654,27 @@ fn push_pair(out: &mut Vec<String>, flag: &str, value: &str) {
 }
 
 pub(crate) fn split_flags(s: &str) -> Vec<String> {
-    s.split_whitespace().map(String::from).collect()
+    let mut flags = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if quote != Some('\'') => word.push(chars.next().unwrap_or(ch)),
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(ch),
+            ch if ch.is_whitespace() && quote.is_none() => {
+                if !word.is_empty() {
+                    flags.push(std::mem::take(&mut word));
+                }
+            }
+            ch => word.push(ch),
+        }
+    }
+    if !word.is_empty() {
+        flags.push(word);
+    }
+    flags
 }
 
 fn existing(dirs: impl Iterator<Item = PathBuf>) -> Vec<PathBuf> {
@@ -645,6 +708,26 @@ fn compiler_include_dirs(lang: &str) -> Vec<PathBuf> {
         .take_while(|l| !l.starts_with("End of search list."))
         .map(|l| PathBuf::from(l.trim()));
     existing(dirs)
+}
+
+fn pkg_config_paths() -> Vec<PathBuf> {
+    crate::conan::package_dir()
+        .into_iter()
+        .map(Path::to_path_buf)
+        .chain(
+            std::env::var_os("PKG_CONFIG_PATH")
+                .iter()
+                .flat_map(std::env::split_paths),
+        )
+        .collect()
+}
+
+pub(crate) fn pkg_config_command() -> Command {
+    let mut command = Command::new("pkg-config");
+    if let Ok(paths) = std::env::join_paths(pkg_config_paths()) {
+        command.env("PKG_CONFIG_PATH", paths);
+    }
+    command
 }
 
 fn capture(program: &str, args: &[&str]) -> Option<String> {

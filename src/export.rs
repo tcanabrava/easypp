@@ -162,6 +162,16 @@ fn cmake(project: &Project) -> String {
         let _ = writeln!(w, "link_directories({})\n", list(lib_dirs.into_iter()));
     }
     if !pkgs.is_empty() {
+        if pkgs.iter().any(|name| crate::conan::provides(name))
+            && let Some(dir) = crate::conan::package_dir()
+            && let Ok(dir) = dir.strip_prefix(&project.root)
+        {
+            let _ = writeln!(
+                w,
+                "set(ENV{{PKG_CONFIG_PATH}} \"${{CMAKE_CURRENT_SOURCE_DIR}}/{}:$ENV{{PKG_CONFIG_PATH}}\")",
+                dir.display()
+            );
+        }
         let _ = writeln!(w, "find_package(PkgConfig REQUIRED)");
         for pkg in &pkgs {
             let _ = writeln!(

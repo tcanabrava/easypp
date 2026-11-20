@@ -151,6 +151,35 @@ easypp clean
   pkg-config folder changes. `--no-cache` ignores the cache, and `easypp clean`
   deletes it.
 
+## Conan packages
+
+With Conan 2, pkg-config, and a Conan profile for your Clang toolchain, add a
+dependency from the project directory:
+
+```sh
+easypp deps add zlib/1.3.1 --release
+easypp build --release
+```
+
+`deps add` writes the reference to the `[requires]` section of `conanfile.txt`
+after a successful install. Adding another version of the same package replaces
+its reference. Check the manifest into version control. From a fresh checkout
+or after `easypp clean`, restore the dependencies with:
+
+```sh
+easypp deps install --release
+```
+
+Use ordinary includes such as `#include <zlib.h>`. Conan generates pkg-config
+metadata under `build/conan/release/`. Omitting `--release` selects a separate
+Debug installation from the same manifest. If a binary is unavailable, append
+`-- --build=missing` to the dependency command. The manifest pins direct
+requirements. Commit a Conan lockfile as well to pin the resolved recipe graph.
+Configure exported CMake builds for the profile used to run `easypp export-cmake`.
+
+See [the compressed JSON example](examples/conan-json/README.md) for zlib,
+nlohmann/json, and GoogleTest in one project.
+
 ## Building easypp
 
 ```sh

@@ -16,7 +16,7 @@ use crate::system::SysDep;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// What `includes()` reports for a file that declares a Qt meta-object.
 pub const MOC_MARKER: &str = "#qt moc";
@@ -126,7 +126,7 @@ pub fn find_tools<'a>(mut deps: impl Iterator<Item = &'a SysDep>) -> Option<QtTo
     let mut dirs: Vec<PathBuf> = ["libexecdir", "bindir"]
         .iter()
         .filter_map(|var| {
-            let out = Command::new("pkg-config")
+            let out = crate::system::pkg_config_command()
                 .args([&format!("--variable={var}"), "Qt6Core"])
                 .stdin(Stdio::null())
                 .output()

@@ -4,7 +4,6 @@ use crate::system::Package;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub fn is_native(name: &str) -> bool {
     name.starts_with("KF6::") || name.starts_with("KDEGames6")
@@ -184,7 +183,7 @@ fn collect(
         return false;
     };
     let run = |flag: &str| {
-        Command::new("pkg-config")
+        crate::system::pkg_config_command()
             .args([flag, &p.name])
             .output()
             .ok()

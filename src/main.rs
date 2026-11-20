@@ -1,5 +1,6 @@
 mod builder;
 mod cache;
+mod conan;
 mod cond;
 mod export;
 mod hints;
@@ -28,6 +29,8 @@ Commands:
   new <name>            Create a new project in ./<name>
   init                  Create the project layout in the current folder
   build                 Build all libraries and executables
+  deps add <ref>...     Record and install Conan packages
+  deps install          Install packages from conanfile.txt
   run [name] [-- args]  Build and run an executable from src/bin
   debug [name] [-- args] Build and start a program or test under lldb
   test [filter]         Build and run the programs in src/tests
@@ -178,7 +181,7 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         "build" | "run" | "debug" | "test" | "info" | "clean" | "watch" | "fmt" | "lint"
-        | "export-cmake" => {}
+        | "export-cmake" | "deps" => {}
         other => return Err(format!("unknown command '{other}' (see `easypp --help`)")),
     }
 
@@ -186,6 +189,21 @@ fn run() -> Result<ExitCode, String> {
     let invoked_from = std::env::current_dir().map_err(|e| e.to_string())?;
     let root = project::find_root(&invoked_from)?;
     std::env::set_current_dir(&root).map_err(|e| e.to_string())?;
+
+    conan::configure(&root, &cli.opts);
+    if cli.command == "deps" {
+        let requested = match cli.positional.as_slice() {
+            [command] if command == "install" => &[][..],
+            [command, refs @ ..] if command == "add" && !refs.is_empty() => refs,
+            _ => {
+                return Err(
+                    "usage: easypp deps add <name/version>... | easypp deps install".into(),
+                );
+            }
+        };
+        conan::install(requested, &cli.passthrough, &cli.opts)?;
+        return Ok(ExitCode::SUCCESS);
+    }
 
     if cli.command == "clean" {
         if Path::new(builder::BUILD_DIR).exists() {
@@ -242,6 +260,7 @@ fn run() -> Result<ExitCode, String> {
 /// Discovers the project at `root` (the current directory), using the cache
 /// unless disabled. The cache is released before returning.
 pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Project, String> {
+    conan::require_installed(root, opts)?;
     let mut cache = if opts.cache {
         match cache::Cache::open(Path::new(builder::BUILD_DIR)) {
             Ok(cache) => Some(cache),

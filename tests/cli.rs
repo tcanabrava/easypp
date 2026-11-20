@@ -403,3 +403,55 @@ int main(void) {
     p.write("src/bin/check/message.ui", "<interface> </interface>\n");
     assert!(p.ok(&["run", "check"]).contains("glib-compile-resources"));
 }
+
+#[test]
+fn discovers_conan_metadata_for_the_selected_profile() {
+    let p = Project::new("conan-pc");
+    p.remove("src/bin/hello.cpp");
+    p.write(
+        "src/bin/probe.cpp",
+        "#include <easypp_probe.h>\nint main() { return probe() == 42 ? 0 : 1; }\n",
+    );
+    let prefix = p.dir.join("dependency with spaces");
+    p.write(
+        "dependency with spaces/include/easypp_probe.h",
+        "extern \"C\" int probe(void);\n",
+    );
+    p.write(
+        "dependency with spaces/probe.c",
+        "int probe(void) { return 42; }\n",
+    );
+    assert!(
+        Command::new("clang")
+            .args(["-shared", "-fPIC", "probe.c", "-o", "libeasypp_probe.so"])
+            .current_dir(&prefix)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let pc = "build/conan/release/easypp-probe.pc";
+    let metadata = format!(
+        "prefix={}\nName: easypp-probe\nDescription: Conan metadata fixture\nVersion: 1\nCflags: -I\"${{prefix}}/include\"\nLibs: -L\"${{prefix}}\" -leasypp_probe\n",
+        prefix.display()
+    );
+    // Another component can expose the same include directory.
+    p.write(
+        "build/conan/release/another-component.pc",
+        &metadata.replace("-leasypp_probe", "-lwrong_component"),
+    );
+    p.write(pc, &metadata);
+    assert!(
+        p.ok(&["info", "--release"])
+            .contains("easypp-probe (Conan)")
+    );
+    p.ok(&["run", "probe", "--release"]);
+    assert!(!p.ok(&["info"]).contains("easypp-probe (Conan)"));
+    p.write(
+        pc,
+        &metadata.replace("-leasypp_probe", "-lmissing_easypp_probe"),
+    );
+    assert!(
+        p.fails(&["build", "--release"])
+            .contains("missing_easypp_probe")
+    );
+}
