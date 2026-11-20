@@ -1,6 +1,7 @@
 project('blockfall', 'cpp',
-  default_options: ['cpp_std=c++20', 'warning_level=1', 'werror=true'])
-add_project_arguments('-pedantic', language: 'cpp')
+  default_options: ['cpp_std=c++23', 'warning_level=1', 'werror=true',
+                   'buildtype=debug', 'b_sanitize=address,undefined'])
+add_project_arguments('-pedantic', '-fno-sanitize-recover=undefined', language: 'cpp')
 
 inc = include_directories('src/libs')
 sdl2 = dependency('sdl2')

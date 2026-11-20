@@ -7,27 +7,27 @@ make	GNU Make 4.4.1
 cpus	16
 
 # configuration size (non-blank, non-comment lines / words)
-cmake/CMakeLists.txt	32	91
-meson/meson.build	24	121
-make/Makefile	34	163
+cmake/CMakeLists.txt	38	102
+meson/meson.build	25	124
+make/Makefile	35	171
 easypp	0	0
 
 # distinct build-language commands/functions used
-cmake	add_compile_options add_executable add_library add_test cmake_minimum_required enable_testing endforeach find_package foreach pkg_check_modules project set target_include_directories target_link_libraries 
+cmake	add_compile_options add_executable add_library add_link_options add_test cmake_minimum_required enable_testing endforeach endif find_package foreach if pkg_check_modules project set target_include_directories target_link_libraries 
 meson	add_project_arguments declare_dependency dependency executable get_variable include_directories project static_library test 
 meson-kwargs	default_options: dependencies: include_directories: language: link_with: 
 
 # clean build + test, then no-op rebuild (seconds, median of 3)
-easypp	ok=yes	clean=1.663581045	noop=.017382989	cmd=easypp build && easypp test
-cmake	ok=yes	clean=1.316696560	noop=.024789942	cmd=cmake -S . -B build -G Ninja && cmake --build build && ctest --test-dir build
-meson	ok=yes	clean=1.746561514	noop=.223297072	cmd=meson setup build && meson test -C build
-make	ok=yes	clean=1.167827308	noop=.022317292	cmd=make -j16 all && make test
+easypp	ok=yes	clean=2.183611063	noop=.024294294	cmd=easypp build && easypp test
+cmake	ok=yes	clean=1.824851411	noop=.025031069	cmd=cmake -S . -B build -G Ninja && cmake --build build && ctest --test-dir build
+meson	ok=yes	clean=2.339993664	noop=.244008986	cmd=meson setup build && meson test -C build
+make	ok=yes	clean=1.328975699	noop=.024767455	cmd=make -j16 all && make test
 
 # scenario: extract scoring into a new library, without touching build files
 easypp	exit=0	builds and tests pass
-cmake	exit=1	game.cpp:(.text+0x78c): undefined reference to `blockfall::line_score(int, int)'
-meson	exit=125	meson/build/../src/libs/game/game.cpp:165:(.text+0x78c): undefined reference to `blockfall::line_score(int, int)'
-make	exit=2	make/src/libs/game/game.cpp:165:(.text+0x78c): undefined reference to `blockfall::line_score(int, int)'
+cmake	exit=1	cmake/src/libs/game/game.cpp:165:(.text+0x20b3): undefined reference to `blockfall::line_score(int, int)'
+meson	exit=125	meson/build/../src/libs/game/game.cpp:165:(.text+0x20b3): undefined reference to `blockfall::line_score(int, int)'
+make	exit=2	make/src/libs/game/game.cpp:165:(.text+0x20b3): undefined reference to `blockfall::line_score(int, int)'
 
 # the edit each tool needs for the new library (lines added/changed)
 cmake	+3	-1	builds and tests pass

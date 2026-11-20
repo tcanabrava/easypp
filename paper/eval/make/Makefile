@@ -1,5 +1,6 @@
 CXX        := clang++
-CXXFLAGS   := -std=c++20 -Wall -pedantic -Werror -O0 -g -Isrc/libs -MMD -MP
+SANITIZE   := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+CXXFLAGS   := -std=c++23 -Wall -pedantic -Werror -O0 -g $(SANITIZE) -Isrc/libs -MMD -MP
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
 SDL_LIBS   := $(shell pkg-config --libs sdl2)
 B          := build
@@ -26,14 +27,14 @@ $(call lib,game):   $(call obj,src/libs/game/game.cpp)
 $(call lib,render): $(call obj,src/libs/render/render.cpp)
 
 $(B)/blockfall: $(call obj,src/bin/blockfall.cpp) $(call lib,render) $(GAME_LIBS)
-	$(CXX) $^ $(SDL_LIBS) -o $@
+	$(CXX) $(SANITIZE) $^ $(SDL_LIBS) -o $@
 
 $(B)/pieces_test: $(call obj,src/tests/pieces_test.cpp) $(call lib,pieces)
 $(B)/bag_test:    $(call obj,src/tests/bag_test.cpp) $(call lib,bag) $(call lib,pieces)
 $(B)/board_test:  $(call obj,src/tests/board_test.cpp) $(call lib,board) $(call lib,pieces)
 $(B)/game_test:   $(call obj,src/tests/game_test.cpp) $(GAME_LIBS)
 $(TESTS):
-	$(CXX) $^ -o $@
+	$(CXX) $(SANITIZE) $^ -o $@
 
 test: $(TESTS)
 	@for t in $(TESTS); do $$t && echo "$$t ok" || exit 1; done

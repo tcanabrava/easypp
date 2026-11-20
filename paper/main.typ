@@ -40,10 +40,12 @@
   build file: folders under `src/libs` are static libraries, files under `src/bin`
   are executables, files under `src/tests` are tests. Which libraries each program needs is worked
   out from its `#include` lines, including system libraries found through
-  pkg-config. The defaults are fixed and strict: clang, C++20 and
-  `-Wall -pedantic -Werror`. We compare it with CMake, Meson and a hand-written
-  Makefile on a 12-target SDL2 game. The other three need 24 to 34 lines of build
-  code to describe the same project. When a new library is added without editing
+  pkg-config. The defaults are fixed and strict: clang, C++23,
+  `-Wall -pedantic -Werror`, and AddressSanitizer with UBSan in debug builds.
+  Compiler and linker errors come with plain-language explanations, and a
+  `CMakeLists.txt` can be exported for the move to industry tools. We compare it
+  with CMake, Meson and a hand-written Makefile on a 12-target SDL2 game. The
+  other three need 25 to 38 lines of build code to describe the same project. When a new library is added without editing
   that code, all three fail with a linker error and #easypp builds. With minimal
   set-up, CMake and Make silently compile a program that reads an uninitialised
   variable, using GNU C++17. #easypp rejects it. We argue that these defaults let a course teach
@@ -72,10 +74,11 @@ multi-file program needs no build knowledge at all.
 
 This paper asks how far the same idea goes in C++. Our contributions are:
 
-+ #easypp, a build tool of about 2,600 lines of Rust whose only dependency is an
++ #easypp, a build tool of about 5,500 lines of Rust whose only dependency is an
   embedded database used as a build cache. It derives the
   whole build from a fixed folder layout and from the `#include` lines in the
-  sources (@sec-design).
+  sources, including system libraries, OpenMP, Boost and Qt 6 code generation
+  (@sec-design).
 + A comparison of the main C++ build and project tools along the axes that matter
   to a beginner (@sec-landscape).
 + Measurements on a 12-target game against CMake, Meson and Make. We measure build-code
@@ -107,7 +110,7 @@ writing their first program with more than one file.
     [IDE projects (Code::Blocks, VS)], [XML project file edited through dialogs], [IDE template], [—/plug-ins], [Dialogs], [Wizard],
     [vcpkg @vcpkg, Conan @conan], [Package acquisition only; used together with a build system], [n/a], [n/a], [n/a], [Manifest],
     [Cargo (Rust) @cargo-targets], [`Cargo.toml` + folder conventions], [Lints on], [`cargo test`], [Modules: none; crates: `Cargo.toml`], [`cargo new`],
-    [*#easypp*], [*Folder conventions only*], [*`-Wall`* *`-pedantic`* *`-Werror`*], [*`easypp test`*], [*Found from `#include`s*], [*`easypp new`*],
+    [*#easypp*], [*Folder conventions only*], [*`-Wall`* \ *`-pedantic`* \ *`-Werror`*, *sanitizers in debug*], [*`easypp test`* (parallel, time limit)], [*Found from `#include`s*], [*`easypp new`*],
   )},
   caption: [Build and project tools from a beginner's point of view. CMake, Meson and Make were measured
   (@sec-eval); the other rows come from each tool's documentation.],
@@ -135,13 +138,17 @@ project/
     libs/<name>/       static library <name>: every .c/.cpp inside it
     bin/<name>.cpp     executable <name>  (or a folder bin/<name>/ for several files)
     tests/<name>.cpp   test <name>: passes when it exits with status 0
-    thirdparty/        third-party headers, added with -isystem
+    thirdparty/<name>/ third-party code: headers (-isystem), sources compiled
+                       without warnings into a library
   build/               created by easypp; never edited
 ```
 
 A library folder with no source files is a header-only library. `easypp new`
-writes this layout with one library, one program and one test. The commands are
-`build`, `run`, `test`, `info`, which prints what was discovered, and `clean`.
+writes this layout with one library, one program and one test, plus
+`.clang-format` and `.clang-tidy` files so the editor agrees with the tool. The
+commands are `build`, `run`, `test`, `debug`, `info` (what was discovered),
+`clean`, `fmt`, `lint`, `watch` (keeps the editor's compilation database current)
+and `export-cmake`.
 
 == Discovering dependencies from includes
 
@@ -150,9 +157,14 @@ resolves each include the way the compiler will, given the include paths #easypp
 passes:
 
 + relative to the including file;
-+ under `src/libs` (so `#include "board/board.hpp"` works);
-+ inside each library folder;
++ under `src/libs`, so a library's header is always written with its folder,
+  `#include "board/board.hpp"`;
 + inside `src/thirdparty`.
+
+Only `src/libs` is on the include path, never a library's own folder. A header is
+therefore always named together with the library it belongs to, and two
+libraries can both have a `utils.hpp` without ambiguity. Including a library's
+header by its bare name gets a warning that names the include to write.
 
 If the header belongs to library _L_, the component depends on _L_. Headers that
 belong to no library, such as one next to an executable or in `thirdparty`, are
@@ -162,10 +174,15 @@ reaches, in dependents-first order, which is the order static linking requires.
 A cycle between libraries is reported as an error that names the cycle.
 #easypp treats it as a layering mistake to fix, not something to work around.
 
-The scan is a line-based reading of `#include` directives, not a preprocessor.
-Includes inside `#if` blocks are always counted, and includes built with macros
-are not seen. For student code this approximation errs in the safe direction:
-the worst case is an extra library on the link line.
+The scan is a line-based reading of `#include` directives, not a full
+preprocessor. It does evaluate `#if`, `#ifdef` and `#elif` with three-valued
+logic: macros known to be defined with clang on Linux are true, those of other
+platforms and compilers (`_WIN32`, `__APPLE__`, `_MSC_VER`) are false, and
+everything else is unknown. Only blocks that are certainly off are skipped, so
+header guards and feature macros keep working. An `#include` written with a
+macro cannot be followed and gets a warning. For student code this
+approximation errs in the safe direction: the worst case is an extra library on
+the link line.
 
 == System libraries
 
@@ -178,17 +195,33 @@ is then mapped to a library by three rules, tried in order:
 + A pkg-config package @pkg-config named like the header: `<SDL2/SDL.h>` maps to
   `sdl2`, `<curl/curl.h>` to `libcurl`, `<zlib.h>` to `zlib`.
 + A package whose private include folder contains the header. For example, `<SDL.h>`
-  lives in `/usr/include/SDL2`. When several packages match, such as gtk2, gtk3 and gtk4 for
-  `<gtk/gtk.h>`, the most specific folder wins, then the base package.
-+ A `lib<name>.so` or `.a` with the header's name in the library folders. A library
-  outside the linker's defaults also gets `-L` and an rpath.
+  lives in `/usr/include/SDL2`. When several versions match, such as gtk2, gtk3
+  and gtk4 for `<gtk/gtk.h>`, the latest always wins: the version is read from
+  the folder's name (`gtk-4.0`), not from package names, where `gdk-x11-3.0` would
+  read as version 11. There is no override, by design.
++ A `lib<name>.so` or `.a` with the header's name in the library folders, trying
+  `lib<prefix>_<module>` first for `<prefix/module...>`. This covers Boost's
+  compiled libraries, which ship no pkg-config files (`<boost/json.hpp>` links
+  `-lboost_json`). A library outside the linker's defaults also gets `-L` and an
+  rpath.
 
 C++ standard library headers and compiler built-ins are excluded. `<math.h>` is
-mapped to `-lm`. Flags come from `pkg-config`, which also follows `Requires:`.
+mapped to `-lm`, and `<omp.h>` or any `#pragma omp` line adds `-fopenmp`. A test
+that includes GoogleTest or Catch2 without defining `main()` is linked with the
+framework's `main` (`gtest_main`, `catch2-with-main`). Flags come from `pkg-config`, which also follows `Requires:`.
 Its `-I` flags are turned into `-isystem`, so warnings inside system headers
 cannot break a `-Werror` build. Each component gets only the flags of the system
 libraries it uses, directly or through internal libraries. System libraries are
 linked with `-Wl,--as-needed`, so a wrong guess is dropped by the linker at no cost.
+Repeated libraries keep their last position on the link line, which static
+linking requires.
+
+*Qt 6.* `<QtWidgets/...>` and bare `<QPushButton>` map to the right Qt module, and
+code using Qt is compiled with `-fPIC`, which Qt requires. Qt's code generators
+run without configuration: a header or source with `Q_OBJECT` goes through moc, a
+`.ui` form through uic, and a `.qrc` resource file through rcc. A library's
+resources are linked straight into the programs that use it, because inside a
+static archive the linker would drop them. Qt 5 is not supported.
 
 == A per-project cache <sec-cache>
 
@@ -220,19 +253,50 @@ is running in the same project, the tool warns and works without it.
     align: left,
     table.header[*Setting*][*Value*],
     [Compilers], [`clang` for `.c`, `clang++` for `.cpp/.cc/.cxx`; executables containing C++ link with `clang++`],
-    [Language], [`-std=c17`, `-std=c++20` (no GNU extensions)],
-    [Diagnostics], [`-Wall -pedantic -Werror`, always],
-    [Profiles], [debug `-O0 -g` (default); `--release` gives `-O2 -DNDEBUG`],
+    [Language], [`-std=c17`, `-std=c++23` (no GNU extensions)],
+    [Diagnostics], [`-Wall -pedantic -Werror` for the project's code; `-w` for third-party sources],
+    [Profiles], [debug `-O0 -g` with AddressSanitizer and UBSan, undefined behaviour fatal (default); `--release` gives `-O2 -DNDEBUG`],
     [Third-party and system headers], [`-isystem`, so their warnings are not the student's problem],
-    [Editor support], [`compile_commands.json` @clang-cdb at the project root, kept current by `easypp watch`],
-    [Incrementality], [clang depfiles (`-MMD`), a command stamp per output, parallel compilation, a per-project discovery cache (@sec-cache)],
+    [Tests], [in parallel, 60 s limit each, output shown only for failures],
+    [Editor support], [`compile_commands.json` @clang-cdb at the project root, kept current by `easypp watch`; `.clang-format` and `.clang-tidy` matching `easypp fmt` and `lint`],
+    [Incrementality], [clang depfiles, a command stamp per output, parallel compilation, removal of stale outputs, a per-project discovery cache (@sec-cache)],
   ),
   caption: [What every #easypp project gets.],
 ) <tab-defaults>
 
-Nothing in @tab-defaults can be changed from inside a project. This is deliberate.
-For teaching, a setting that exists is a setting someone must explain, and a
-warning that can be silenced will be.
+Nothing in @tab-defaults can be changed from inside a project, except that
+`--no-sanitize` builds debug without sanitizers. This is deliberate. For
+teaching, a setting that exists is a setting someone must explain, and a warning
+that can be silenced will be.
+
+Debug executables also get a small generated file with LeakSanitizer
+suppressions for libraries that keep memory until exit on purpose (GTK, GLib,
+fontconfig, Qt, SDL, Mesa). A leak report blamed on them would teach students to
+ignore the sanitizer. The four examples run with no sanitizer reports.
+
+== Help around the build <sec-help>
+
+*Errors explained.* After a failed compile or link, the tool's message is kept
+and #easypp adds `help:` lines computed from the project. A missing header gets
+the right `"library/header"` form, a note that Qt 5 is unsupported, or the
+distribution's command for finding the package that provides it. An undefined
+reference is matched against the project's files. It may be declared in a header
+but defined nowhere, defined with a different signature, or a class member or
+destructor without a body. It may be a C function called from C++ without
+`extern "C"`, or a function from a library whose header is not included.
+
+*Debugging, formatting, linting.* `easypp debug` starts a program under gdb or
+lldb with sanitizer errors set to abort, so the debugger stops at the faulty
+access. `easypp fmt` formats with clang-format, and `easypp lint` runs clang-tidy
+with checks that find real bugs (use after move, unchecked conversions,
+exceptions escaping) without style nagging.
+
+*Moving on.* `easypp export-cmake` writes a `CMakeLists.txt` in which every
+folder is the target it was: libraries with their links, programs, CTest tests,
+pkg-config packages, OpenMP, Qt with AUTOMOC, AUTOUIC and AUTORCC, the same
+warnings and the debug sanitizers. All four examples, a project with third-party
+sources and one with GoogleTest and Catch2 build with the exported file and pass
+`ctest`.
 
 = Evaluation <sec-eval>
 
@@ -246,8 +310,9 @@ Its dependency structure is deliberately layered:
 SDL, so the tool must find the SDL dependency transitively.
 
 For CMake, Meson and Make we wrote the shortest idiomatic build description we
-could that reproduces #easypp's behaviour. That means the same flags, C++20, tests registered with the tool's
-test runner, and SDL2 through pkg-config. The CMake version uses modern target-based commands. All
+could that reproduces #easypp's behaviour. That means the same flags, C++23,
+sanitizers in debug builds, tests registered with the tool's test runner, and
+SDL2 through pkg-config. The CMake version uses modern target-based commands. All
 files are in `eval/`. `eval/run.sh` reruns every measurement from a fresh copy;
 its output is `eval/results.txt`. The versions were clang 23.1.5, CMake 4.5.0 (Ninja
 generator), Meson 1.12.1, Ninja 1.13.2 and GNU Make 4.4.1, on a 16-thread Linux machine.
@@ -259,17 +324,18 @@ generator), Meson 1.12.1, Ninja 1.13.2 and GNU Make 4.4.1, on a 16-thread Linux 
     columns: (auto, auto, auto, 1fr),
     align: (left, right, right, left),
     table.header[*Tool*][*Lines*][*Words*][*Build-language vocabulary used*],
-    [CMake], [32], [91], [14 commands, e.g. `add_library`, `target_link_libraries`, `target_include_directories`, `pkg_check_modules`, `enable_testing`, `add_test`; the `PUBLIC`/`PRIVATE`/`INTERFACE` keywords; imported targets (`PkgConfig::SDL2`)],
-    [Meson], [24], [121], [9 functions (`static_library`, `declare_dependency`, `dependency`, `include_directories`, …) and 5 keyword arguments (`link_with:`, `dependencies:`, …)],
-    [Make], [34], [163], [rules, pattern rules, automatic variables (`$@ $< $^`), `patsubst`/`call`/`shell`, depfile inclusion; library order written by hand],
+    [CMake], [38], [102], [17 commands, e.g. `add_library`, `target_link_libraries`, `target_include_directories`, `pkg_check_modules`, `enable_testing`, `add_test`; the `PUBLIC`/`PRIVATE`/`INTERFACE` keywords; imported targets (`PkgConfig::SDL2`)],
+    [Meson], [25], [124], [9 functions (`static_library`, `declare_dependency`, `dependency`, `include_directories`, …) and 5 keyword arguments (`link_with:`, `dependencies:`, …)],
+    [Make], [35], [171], [rules, pattern rules, automatic variables (`$@ $< $^`), `patsubst`/`call`/`shell`, depfile inclusion; library order written by hand],
     [#easypp], [0], [0], [the folder layout],
   ),
   caption: [Size of the build description for Blockfall (non-blank, non-comment lines).],
 ) <tab-size>
 
 The build descriptions are short in absolute terms. What matters for teaching is
-what each line asks the student to understand. The CMake file's 32 lines use 14
-different commands and a three-way visibility system. Meson needs two objects per
+what each line asks the student to understand. The CMake file's 38 lines use 17
+different commands, a three-way visibility system and, for the sanitizers,
+generator expressions (`$<$<CONFIG:Debug>:...>`). Meson needs two objects per
 library: the library itself and a `declare_dependency` that carries its include
 path and link to users. The Makefile must list the libraries in a valid static
 link order. Getting that wrong is a classic source of confusing errors. None of
@@ -331,7 +397,7 @@ int main(int argc, char*[]) {
     [CMake, 3 lines], [yes], [none], [C++17 + GNU extensions],
     [Make, built-in rule], [yes], [none], [C++17 + GNU extensions],
     [Meson, 2 lines], [yes], [2 warnings (`-Wuninitialized`, `-Wvla-cxx-extension`)], [C++17 + GNU extensions],
-    [#easypp, file in `src/bin/`], [*no*], [2 errors, same checks], [C++20],
+    [#easypp, file in `src/bin/`], [*no*], [2 errors, same checks], [C++23],
   ),
   caption: [Minimal projects compiling a program with two beginner mistakes. The standard
   is read from `__cplusplus` (201703 means C++17); without a flag, clang compiles
@@ -353,20 +419,20 @@ student's behalf, has to know to ask.
     columns: (auto, 1.6fr, auto, auto),
     align: (left, left, right, right),
     table.header[*Tool*][*Commands from a clean checkout to tested*][*Clean (s)*][*No-op (s)*],
-    [CMake], [`cmake -S . -B build -G Ninja`, `cmake --build build`, `ctest --test-dir build`], [1.32], [0.025],
-    [Meson], [`meson setup build`, `meson test -C build`], [1.75], [0.223],
-    [Make], [`make -j16 all`, `make test`], [1.17], [0.022],
-    [#easypp], [`easypp build`, `easypp test` (or just `easypp test`)], [1.66], [0.017],
+    [CMake], [`cmake -S . -B build -G Ninja`, `cmake --build build`, `ctest --test-dir build`], [1.82], [0.025],
+    [Meson], [`meson setup build`, `meson test -C build`], [2.34], [0.244],
+    [Make], [`make -j16 all`, `make test`], [1.33], [0.025],
+    [#easypp], [`easypp build`, `easypp test` (or just `easypp test`)], [2.18], [0.024],
   ),
   caption: [Clean configure + build + test, and a no-op rebuild; median of three runs.],
 ) <tab-time>
 
-All four tools are fast enough for a project of this size. The difference between
-fastest and slowest clean build is 0.6 s. #easypp is slower than CMake and Make on
-the first build, because that build also fills its cache (@sec-cache). Its no-op
-rebuild is the fastest of the four. Without the cache (`--no-cache`), the no-op
-rebuild takes about 0.10 s: the cost of asking clang for its search paths and
-parsing about 1,900 pkg-config files on every run.
+All four tools are fast enough for a project of this size; with sanitizers on,
+every clean build takes 1.3–2.3 s. #easypp is slower than CMake and Make on the
+first build, because that build also fills its cache (@sec-cache). Its no-op
+rebuild is on par with CMake's and Make's. Without the cache (`--no-cache`), the
+no-op rebuild takes about 0.10 s: the cost of asking clang for its search paths
+and parsing about 1,900 pkg-config files on every run.
 
 = Implications for teaching <sec-teaching>
 
@@ -390,9 +456,20 @@ the moment it matters, not in a code review weeks later.
 class: uninitialised reads, non-standard extensions that work on one compiler
 only. With `-Werror` these stop the build with a message that names the line.
 With the defaults of CMake or Make they turn into wrong output at run time, or into
-code that does not compile on the examiner's machine. Pinning C++20 also removes
+code that does not compile on the examiner's machine. Pinning C++23 also removes
 a source of confusion seen in practice, courses teaching C++98-era code
 @canabrava2026. The dialect is the same on every student's machine.
+
+*Memory errors are caught where they happen.* With sanitizers on by default, an
+out-of-bounds access, a use after free, a leak or a signed overflow stops the
+program with a report naming the source line, instead of a crash somewhere else
+or, worse, a run that seems correct. `easypp debug` stops the debugger right
+there. These are the bugs a first C++ course spends most of its office hours on.
+
+*Errors speak the course's language.* The link error of @tab-change is the kind
+students cannot decode. #easypp's hints translate the common ones into the terms
+of the project: this function is declared in this header but no `.cpp` defines
+it; this definition does not match its declaration (@sec-help).
 
 *Industry editors work out of the box.* The editors that dominate industry use
 (VS Code 33%, CLion 23%, Visual Studio 21% @jetbrains2025) understand
@@ -408,25 +485,26 @@ which also shows students why separating logic from presentation pays off.
 *A path to industry tools.* The layout maps one-to-one onto CMake concepts: a
 folder in `src/libs` is an `add_library`, a discovered edge is a
 `target_link_libraries`. A later course can introduce CMake by generating the
-build file of a project the students already know. A command that writes that
-`CMakeLists.txt` from the discovered graph would be a natural addition.
+build file of a project the students already know with `easypp export-cmake`,
+and then read it line by line: every line corresponds to a folder or an include
+they wrote themselves.
 
 = Limitations and threats to validity <sec-limits>
 
 *Scope of the tool.* #easypp only targets Linux and clang. That is the most
 serious limitation for teaching, since many students use Windows. Code::Blocks, for instance, is
 distributed for Windows with a bundled MinGW compiler @codeblocks. It does not download packages:
-system libraries must be installed, and third-party code must be header-only in
+system libraries must be installed, and third-party code must be copied into
 `src/thirdparty`. It has no per-target flags, code generation other than Qt's
-(moc, uic, rcc), install step or C++20 modules. Modules would break the include-based discovery. These are not
+(moc, uic, rcc), install step, shared libraries or C++20 modules. Modules would break the include-based discovery. These are not
 oversights: each one would add a configuration surface. But they put a clear limit
 on where the tool can be used.
 
-*Heuristics.* Mapping a system header to a library is a guess. The wrong gtk
-version could be chosen, and a header named like an unrelated library adds a
-useless (though harmless, thanks to `--as-needed`) link flag. There is currently
-no way to override a guess, which goes against the principle of least
-surprise for advanced students. The cache's fingerprint uses folder modification
+*Heuristics.* Mapping a system header to a library is a guess. When several
+versions are installed, the latest always wins, and there is deliberately no
+way to ask for an older one. A header named like an unrelated library adds a
+useless (though harmless, thanks to `--as-needed`) link flag. The include scan
+evaluates only conditions it can decide and cannot follow macro includes. The cache's fingerprint uses folder modification
 times, so a header added inside an existing sub-folder, without any library
 folder changing, is not noticed until the next `easypp clean`.
 
@@ -450,16 +528,19 @@ In C++, every small project currently records its structure twice, once in the
 code and once in a build language. #easypp shows that for the projects students
 write, the second copy can be derived from the first: a fixed folder layout plus
 the `#include` lines say everything needed to build, link and test. On a 12-target
-game, the tool replaces 24–34 lines of build code with none. It turns a link error
+game, the tool replaces 25–38 lines of build code with none. It turns a link error
 into a successful build when a library is added. It rejects two classic beginner
-bugs that the minimal set-ups of CMake and Make let through, and it does so in
-comparable build time. The other tools remain the right choice for projects that
+bugs that the minimal set-ups of CMake and Make let through, catches memory errors
+at run time, explains the errors students meet most, and does so in comparable
+build time. When students are ready for CMake, it writes their first
+`CMakeLists.txt`. The other tools remain the right choice for projects that
 outgrow a fixed layout. For the first contact with multi-file C++, sane defaults
 and no build file let a course spend its time on C++.
 
 #v(1em)
-*Availability.* #easypp, the Blockfall example, the build files for the other
-tools and the evaluation script are in the same repository as this paper
-(`src/`, `examples/blockfall/`, `paper/eval/`).
+*Availability.* #easypp, its end-to-end tests, the examples (Blockfall with SDL2,
+Life with GTK 4 and OpenMP, a Boost.Asio server, a Qt 6 application), the build
+files for the other tools and the evaluation script are in the same repository
+as this paper (`src/`, `tests/`, `examples/`, `paper/eval/`).
 
 #bibliography("refs.yml", style: "ieee")
