@@ -310,6 +310,29 @@ fn examples_build_and_pass_their_tests() {
     }
 }
 
+/// Build the actual executables with no generated files or discovery cache.
+#[test]
+#[ignore = "requires Qt 6 development packages"]
+fn desktop_examples_build_from_source() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    for (example, executable) in [("qt-tasks", "tasks")] {
+        let p = Project::new(example);
+        p.remove("src");
+        let status = Command::new("cp")
+            .arg("-R")
+            .arg(examples.join(example).join("src"))
+            .arg(&p.dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "copy sources for {example}");
+        p.ok(&["build", "-j", "4"]);
+        assert!(p.exists(&format!("build/debug/bin/{executable}")));
+        if example == "qt-tasks" {
+            p.ok(&["test", "-j", "4"]);
+        }
+    }
+}
+
 /// Exercises real KConfig output, including its generated Q_OBJECT class,
 /// transitive library headers, schema edits and recovery of either output.
 #[test]
