@@ -129,7 +129,7 @@ public:
         using callback_type = std::function<bool()>;
 
         Timer(callback_type callback,
-              char const* name)
+              char const* name [[maybe_unused]])
                 : m_callback(std::move(callback))
 #if VTE_DEBUG
                 , m_name(name)

@@ -67,7 +67,7 @@ inline category debug_categories = category::NONE;
 #endif
 
 static inline bool
-check_categories(category cats)
+check_categories(category cats [[maybe_unused]])
 {
 #if VTE_DEBUG
 	return (debug_categories & cats) != category::NONE;

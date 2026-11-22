@@ -25,7 +25,7 @@ pub const BUILD_DIR: &str = "build";
 /// Written at the project root, where every LSP looks for it.
 pub const COMPILE_DB: &str = "compile_commands.json";
 
-const WARNINGS: [&str; 3] = ["-Wall", "-pedantic", "-Werror"];
+pub(crate) const WARNINGS: [&str; 4] = ["-Wall", "-Wextra", "-pedantic", "-Werror"];
 
 /// Debug builds: memory errors and undefined behaviour stop the program with
 /// a report that points at the source line.

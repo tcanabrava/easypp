@@ -466,7 +466,7 @@ private:
         }
 
         bool parse_geometry(char const* str,
-                            GError** error)
+                            GError** error [[maybe_unused]])
         {
                 g_free(geometry);
                 geometry = g_strdup(str);
@@ -475,8 +475,8 @@ private:
 
 #if VTE_GTK == 4
         static void
-        parse_css_error_cb(GtkCssProvider* provider,
-                           void* section,
+        parse_css_error_cb(GtkCssProvider* provider [[maybe_unused]],
+                           void* section [[maybe_unused]],
                            GError* error,
                            GError** ret_error) noexcept
         {
@@ -568,7 +568,7 @@ private:
         };
 
         static gboolean
-        parse_background_image(char const* option, char const* value, void* data, GError** error)
+        parse_background_image(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 g_clear_object(&that->background_pixbuf);
@@ -581,7 +581,7 @@ private:
         }
 
         static gboolean
-        parse_background_extend(char const* option, char const* value, void* data, GError** error)
+        parse_background_extend(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 int v;
@@ -592,14 +592,14 @@ private:
         }
 
         static gboolean
-        parse_cjk_width(char const* option, char const* value, void* data, GError** error)
+        parse_cjk_width(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 return that->parse_width_enum(value, that->cjk_ambiguous_width, error);
         };
 
         static gboolean
-        parse_cursor_blink(char const* option, char const* value, void* data, GError** error)
+        parse_cursor_blink(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 int v;
@@ -610,7 +610,7 @@ private:
         }
 
         static gboolean
-        parse_cursor_shape(char const* option, char const* value, void* data, GError** error)
+        parse_cursor_shape(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 int v;
@@ -621,7 +621,7 @@ private:
         }
 
         static gboolean
-        parse_bg_color(char const* option, char const* value, void* data, GError** error)
+        parse_bg_color(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 bool set;
@@ -629,21 +629,21 @@ private:
         }
 
         static gboolean
-        parse_css_file(char const* option, char const* value, void* data, GError** error)
+        parse_css_file(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 return that->parse_css(value, error);
         }
 
         static gboolean
-        parse_fd(char const* option, char const* value, void* data, GError** error)
+        parse_fd(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 return that->parse_fd_arg(value, error);
         }
 
         static gboolean
-        parse_fg_color(char const* option, char const* value, void* data, GError** error)
+        parse_fg_color(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 bool set;
@@ -651,35 +651,35 @@ private:
         }
 
         static gboolean
-        parse_cursor_bg_color(char const* option, char const* value, void* data, GError** error)
+        parse_cursor_bg_color(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 return that->parse_color(value, &that->cursor_bg_color, &that->cursor_bg_color_set, error);
         }
 
         static gboolean
-        parse_cursor_fg_color(char const* option, char const* value, void* data, GError** error)
+        parse_cursor_fg_color(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 return that->parse_color(value, &that->cursor_fg_color, &that->cursor_fg_color_set, error);
         }
 
         static gboolean
-        parse_hl_bg_color(char const* option, char const* value, void* data, GError** error)
+        parse_hl_bg_color(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 return that->parse_color(value, &that->hl_bg_color, &that->hl_bg_color_set, error);
         }
 
         static gboolean
-        parse_hl_fg_color(char const* option, char const* value, void* data, GError** error)
+        parse_hl_fg_color(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 return that->parse_color(value, &that->hl_fg_color, &that->hl_fg_color_set, error);
         }
 
         static gboolean
-        parse_text_blink(char const* option, char const* value, void* data, GError** error)
+        parse_text_blink(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 int v;
@@ -690,7 +690,7 @@ private:
         }
 
         static gboolean
-        parse_verbosity(char const* option, char const* value, void* data, GError** error)
+        parse_verbosity(char const* option [[maybe_unused]], char const* value [[maybe_unused]], void* data, GError** error [[maybe_unused]])
         {
                 Options* that = static_cast<Options*>(data);
                 that->verbosity++;
@@ -698,7 +698,7 @@ private:
         }
 
         static gboolean
-        parse_xalign(char const* option, char const* value, void* data, GError** error)
+        parse_xalign(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 auto const that = static_cast<Options*>(data);
                 auto v = int{};
@@ -709,7 +709,7 @@ private:
         }
 
         static gboolean
-        parse_yalign(char const* option, char const* value, void* data, GError** error)
+        parse_yalign(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 auto const that = static_cast<Options*>(data);
                 auto v = int{};
@@ -720,7 +720,7 @@ private:
         }
 
         static gboolean
-        parse_presets(char const* option, char const* value, void* data, GError** error)
+        parse_presets(char const* option [[maybe_unused]], char const* value, void* data, GError** error)
         {
                 Options* that = static_cast<Options*>(data);
                 if (!that->preset_options(value)) {
@@ -875,7 +875,7 @@ private:
 
                 auto load_string_option = [&](char const* key,
                                               char** ptr,
-                                              bool raw = false) noexcept -> void
+                                              bool raw [[maybe_unused]] = false) noexcept -> void
                 {
                         auto str = vte::glib::take_string
                                 (g_key_file_get_string(keyfile, CONFIG_GROUP, key, nullptr));
@@ -895,7 +895,7 @@ private:
 
                 auto load_strv_option = [&](char const* key,
                                             char*** ptr,
-                                            bool raw = false) noexcept -> void
+                                            bool raw [[maybe_unused]] = false) noexcept -> void
                 {
                         auto len = gsize{0};
                         auto strv = vte::glib::take_strv
@@ -1503,7 +1503,7 @@ public:
                         { "scrollbar-policy", 'P', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_STRING,
                           &dummy_string, nullptr, nullptr },
 
-                        { nullptr }
+                        {}
                 };
 
                 gboolean no_load_config = false;
@@ -1531,7 +1531,7 @@ public:
                           &no_load_config,
                           "Don't load default configuration",
                           nullptr },
-                        { nullptr },
+                        {},
                 };
 
                 /* Look for '--' */
@@ -1681,7 +1681,7 @@ Options options{}; /* global */
 /* debug output */
 
 static void
-fprintln(FILE* fp,
+fprintln(FILE* fp [[maybe_unused]],
          int level,
          fmt::string_view fmt,
          fmt::format_args args) noexcept
@@ -2089,8 +2089,8 @@ make_icon_from_surface(cairo_surface_t* surface)
 
 static void
 vteapp_terminal_icon_color_changed_cb(VteappTerminal* terminal,
-                                      char const* prop,
-                                      void* user_data)
+                                      char const* prop [[maybe_unused]],
+                                      void* user_data [[maybe_unused]])
 {
         g_clear_object(&terminal->icon_from_icon_color);
 
@@ -2121,8 +2121,8 @@ vteapp_terminal_icon_color_changed_cb(VteappTerminal* terminal,
 
 static void
 vteapp_terminal_icon_image_changed_cb(VteappTerminal* terminal,
-                                      char const* prop,
-                                      void* user_data)
+                                      char const* prop [[maybe_unused]],
+                                      void* user_data [[maybe_unused]])
 {
         g_clear_object(&terminal->icon_from_icon_image);
 
@@ -2219,8 +2219,8 @@ vteapp_terminal_draw_background(GtkWidget* widget,
 
 #if VTE_GTK == 4
 static void
-vteapp_terminal_draw_background(GtkWidget* widget,
-                                GtkSnapshot* snapshot)
+vteapp_terminal_draw_background(GtkWidget* widget [[maybe_unused]],
+                                GtkSnapshot* snapshot [[maybe_unused]])
 {
 }
 #endif /* VTE_GTK  == 4 */
@@ -3018,7 +3018,7 @@ vteapp_window_add_dingus(VteappWindow* window,
 }
 
 static void
-vteapp_window_update_geometry(VteappWindow* window)
+vteapp_window_update_geometry(VteappWindow* window [[maybe_unused]])
 {
         if (!options.geometry_hints)
                 return;
@@ -3163,7 +3163,7 @@ vteapp_window_resize(VteappWindow* window)
 }
 
 static void
-vteapp_window_parse_geometry(VteappWindow* window)
+vteapp_window_parse_geometry(VteappWindow* window [[maybe_unused]])
 {
 #if VTE_GTK == 3
         /* First update the geometry hints, so that gtk_window_parse_geometry()
@@ -3259,7 +3259,7 @@ window_spawn_cb(VteTerminal* terminal,
 static bool
 vteapp_window_launch_argv(VteappWindow* window,
                           char** argv,
-                          GError** error)
+                          GError** error [[maybe_unused]])
 {
         // VTE adds flag bits outside GLib’s declared enum range. Keep the
         // bitmask as an integer until passing it to VTE’s C API.
@@ -3376,7 +3376,7 @@ tick_cb(VteappWindow* window)
 
 static bool
 vteapp_window_tick(VteappWindow* window,
-                   GError** error)
+                   GError** error [[maybe_unused]])
 {
         // First send some queries, see issue
         // https://gitlab.gnome.org/GNOME/vte/-/work_items/2952
@@ -3454,7 +3454,7 @@ window_update_paste_sensitivity(VteappWindow* window)
 /* Callbacks */
 
 static void
-window_action_copy_cb(GSimpleAction* action,
+window_action_copy_cb(GSimpleAction* action [[maybe_unused]],
                       GVariant* parameter,
                       void* data)
 {
@@ -3467,7 +3467,7 @@ window_action_copy_cb(GSimpleAction* action,
 }
 
 static void
-window_action_copy_match_cb(GSimpleAction* action,
+window_action_copy_match_cb(GSimpleAction* action [[maybe_unused]],
                             GVariant* parameter,
                             void* data)
 {
@@ -3483,8 +3483,8 @@ window_action_copy_match_cb(GSimpleAction* action,
 }
 
 static void
-window_action_paste_cb(GSimpleAction* action,
-                       GVariant* parameter,
+window_action_paste_cb(GSimpleAction* action [[maybe_unused]],
+                       GVariant* parameter [[maybe_unused]],
                        void* data)
 {
         VteappWindow* window = VTEAPP_WINDOW(data);
@@ -3492,7 +3492,7 @@ window_action_paste_cb(GSimpleAction* action,
 }
 
 static void
-window_action_reset_cb(GSimpleAction* action,
+window_action_reset_cb(GSimpleAction* action [[maybe_unused]],
                        GVariant* parameter,
                        void* data)
 {
@@ -3518,8 +3518,8 @@ window_action_reset_cb(GSimpleAction* action,
 }
 
 static void
-window_action_find_cb(GSimpleAction* action,
-                      GVariant* parameter,
+window_action_find_cb(GSimpleAction* action [[maybe_unused]],
+                      GVariant* parameter [[maybe_unused]],
                       void* data)
 {
         VteappWindow* window = VTEAPP_WINDOW(data);
@@ -3527,7 +3527,7 @@ window_action_find_cb(GSimpleAction* action,
 }
 
 static void
-window_action_fullscreen_state_cb (GSimpleAction *action,
+window_action_fullscreen_state_cb (GSimpleAction *action [[maybe_unused]],
                                    GVariant *state,
                                    void* data)
 {
@@ -3657,16 +3657,16 @@ window_setup_context_menu_cb(VteTerminal* terminal,
 }
 
 static void
-window_cell_size_changed_cb(VteTerminal* term,
-                            guint width,
-                            guint height,
+window_cell_size_changed_cb(VteTerminal* term [[maybe_unused]],
+                            guint width [[maybe_unused]],
+                            guint height [[maybe_unused]],
                             VteappWindow* window)
 {
         vteapp_window_update_geometry(window);
 }
 
 static void
-window_child_exited_cb(VteTerminal* term,
+window_child_exited_cb(VteTerminal* term [[maybe_unused]],
                        int status,
                        VteappWindow* window)
 {
@@ -3727,8 +3727,8 @@ window_clipboard_owner_change_cb(GtkClipboard* clipboard,
 #elif VTE_GTK == 4
 
 static void
-window_clipboard_formats_notify_cb(GdkClipboard* clipboard,
-                                   GParamSpec* pspec,
+window_clipboard_formats_notify_cb(GdkClipboard* clipboard [[maybe_unused]],
+                                   GParamSpec* pspec [[maybe_unused]],
                                    VteappWindow* window)
 {
         window_update_paste_sensitivity(window);
@@ -3737,21 +3737,21 @@ window_clipboard_formats_notify_cb(GdkClipboard* clipboard,
 #endif /* VTE_GTK */
 
 static void
-window_decrease_font_size_cb(VteTerminal* terminal,
+window_decrease_font_size_cb(VteTerminal* terminal [[maybe_unused]],
                              VteappWindow* window)
 {
         vteapp_window_adjust_font_size(window, 1.0 / 1.2);
 }
 
 static void
-window_increase_font_size_cb(VteTerminal* terminal,
+window_increase_font_size_cb(VteTerminal* terminal [[maybe_unused]],
                              VteappWindow* window)
 {
         vteapp_window_adjust_font_size(window, 1.2);
 }
 
 static void
-window_deiconify_window_cb(VteTerminal* terminal,
+window_deiconify_window_cb(VteTerminal* terminal [[maybe_unused]],
                            VteappWindow* window)
 {
         if (!options.allow_window_ops)
@@ -3766,7 +3766,7 @@ window_deiconify_window_cb(VteTerminal* terminal,
 }
 
 static void
-window_iconify_window_cb(VteTerminal* terminal,
+window_iconify_window_cb(VteTerminal* terminal [[maybe_unused]],
                          VteappWindow* window)
 {
         if (!options.allow_window_ops)
@@ -3781,8 +3781,8 @@ window_iconify_window_cb(VteTerminal* terminal,
 }
 
 static void
-window_window_title_changed_cb(VteTerminal* terminal,
-                               char const* prop,
+window_window_title_changed_cb(VteTerminal* terminal [[maybe_unused]],
+                               char const* prop [[maybe_unused]],
                                VteappWindow* window)
 {
         auto const title = vte_terminal_get_termprop_string_by_id(window->terminal,
@@ -3792,7 +3792,7 @@ window_window_title_changed_cb(VteTerminal* terminal,
 }
 
 static void
-window_lower_window_cb(VteTerminal* terminal,
+window_lower_window_cb(VteTerminal* terminal [[maybe_unused]],
                        VteappWindow* window)
 {
         if (!options.allow_window_ops)
@@ -3809,7 +3809,7 @@ window_lower_window_cb(VteTerminal* terminal,
 }
 
 static void
-window_raise_window_cb(VteTerminal* terminal,
+window_raise_window_cb(VteTerminal* terminal [[maybe_unused]],
                        VteappWindow* window)
 {
         if (!options.allow_window_ops)
@@ -3826,7 +3826,7 @@ window_raise_window_cb(VteTerminal* terminal,
 }
 
 static void
-window_maximize_window_cb(VteTerminal* terminal,
+window_maximize_window_cb(VteTerminal* terminal [[maybe_unused]],
                           VteappWindow* window)
 {
         if (!options.allow_window_ops)
@@ -3836,7 +3836,7 @@ window_maximize_window_cb(VteTerminal* terminal,
 }
 
 static void
-window_restore_window_cb(VteTerminal* terminal,
+window_restore_window_cb(VteTerminal* terminal [[maybe_unused]],
                          VteappWindow* window)
 {
         if (!options.allow_window_ops)
@@ -3846,10 +3846,10 @@ window_restore_window_cb(VteTerminal* terminal,
 }
 
 static void
-window_move_window_cb(VteTerminal* terminal,
-                      guint x,
-                      guint y,
-                      VteappWindow* window)
+window_move_window_cb(VteTerminal* terminal [[maybe_unused]],
+                      guint x [[maybe_unused]],
+                      guint y [[maybe_unused]],
+                      VteappWindow* window [[maybe_unused]])
 {
         if (!options.allow_window_ops)
                 return;
@@ -3865,7 +3865,7 @@ window_move_window_cb(VteTerminal* terminal,
 
 static void
 window_toplevel_notify_state_cb(GdkToplevel* toplevel,
-                                GParamSpec* pspec,
+                                GParamSpec* pspec [[maybe_unused]],
                                 VteappWindow* window)
 {
         window->toplevel_state = gdk_toplevel_get_state(toplevel);
@@ -3877,7 +3877,7 @@ window_toplevel_notify_state_cb(GdkToplevel* toplevel,
 static void
 window_notify_cb(GObject* object,
                  GParamSpec* pspec,
-                 VteappWindow* window)
+                 VteappWindow* window [[maybe_unused]])
 {
         if (pspec->owner_type != VTE_TYPE_TERMINAL)
                 return;
@@ -3892,14 +3892,14 @@ window_notify_cb(GObject* object,
 }
 
 static void
-window_refresh_window_cb(VteTerminal* terminal,
+window_refresh_window_cb(VteTerminal* terminal [[maybe_unused]],
                          VteappWindow* window)
 {
         gtk_widget_queue_draw(GTK_WIDGET(window));
 }
 
 static void
-window_resize_window_cb(VteTerminal* terminal,
+window_resize_window_cb(VteTerminal* terminal [[maybe_unused]],
                         guint columns,
                         guint rows,
                         VteappWindow* window)
@@ -3914,7 +3914,7 @@ window_resize_window_cb(VteTerminal* terminal,
 }
 
 static void
-window_selection_changed_cb(VteTerminal* terminal,
+window_selection_changed_cb(VteTerminal* terminal [[maybe_unused]],
                             VteappWindow* window)
 {
         window_update_copy_sensitivity(window);
@@ -3923,7 +3923,7 @@ window_selection_changed_cb(VteTerminal* terminal,
 static void
 window_termprop_changed_cb(VteTerminal* terminal,
                            char const* prop,
-                           VteappWindow* window)
+                           VteappWindow* window [[maybe_unused]])
 {
         if (auto const value = vte::take_freeable
             (vte_terminal_ref_termprop_variant(terminal, prop))) {
@@ -3938,7 +3938,7 @@ window_termprop_changed_cb(VteTerminal* terminal,
 
 static void
 window_input_enabled_state_cb(GAction* action,
-                              GParamSpec* pspec,
+                              GParamSpec* pspec [[maybe_unused]],
                               VteappWindow* window)
 {
         gtk_widget_set_visible(window->readonly_emblem,
@@ -3946,7 +3946,7 @@ window_input_enabled_state_cb(GAction* action,
 }
 
 static void
-window_search_popover_closed_cb(GtkPopover* popover,
+window_search_popover_closed_cb(GtkPopover* popover [[maybe_unused]],
                                 VteappWindow* window)
 {
         if (gtk_toggle_button_get_active(window->find_button))
@@ -4104,8 +4104,8 @@ window_progress_value_changed_cb(VteappTerminal* terminal,
 }
 
 static void
-window_icon_changed_cb(GObject* object,
-                       GParamSpec* pspec,
+window_icon_changed_cb(GObject* object [[maybe_unused]],
+                       GParamSpec* pspec [[maybe_unused]],
                        VteappWindow* window)
 {
         auto const icon = vteapp_terminal_get_icon(VTEAPP_TERMINAL(window->terminal));
@@ -4181,12 +4181,12 @@ vteapp_window_constructed(GObject *object)
 
         /* Create actions */
         GActionEntry const entries[] = {
-                { "copy",        window_action_copy_cb,       "s", nullptr, nullptr },
-                { "copy-match",  window_action_copy_match_cb, "s", nullptr, nullptr },
-                { "paste",       window_action_paste_cb,  nullptr, nullptr, nullptr },
-                { "reset",       window_action_reset_cb,      "b", nullptr, nullptr },
-                { "find",        window_action_find_cb,   nullptr, nullptr, nullptr },
-                { "fullscreen",  nullptr,                 nullptr, "false", window_action_fullscreen_state_cb },
+                { "copy",        window_action_copy_cb,       "s", nullptr, nullptr, {} },
+                { "copy-match",  window_action_copy_match_cb, "s", nullptr, nullptr, {} },
+                { "paste",       window_action_paste_cb,  nullptr, nullptr, nullptr, {} },
+                { "reset",       window_action_reset_cb,      "b", nullptr, nullptr, {} },
+                { "find",        window_action_find_cb,   nullptr, nullptr, nullptr, {} },
+                { "fullscreen",  nullptr,                 nullptr, "false", window_action_fullscreen_state_cb, {} },
         };
 
         GActionMap* map = G_ACTION_MAP(window);
@@ -4602,8 +4602,8 @@ struct _VteappApplicationClass {
 static GType vteapp_application_get_type(void);
 
 static void
-app_action_new_cb(GSimpleAction* action,
-                  GVariant* parameter,
+app_action_new_cb(GSimpleAction* action [[maybe_unused]],
+                  GVariant* parameter [[maybe_unused]],
                   void* data)
 {
         GApplication* application = G_APPLICATION(data);
@@ -4614,8 +4614,8 @@ app_action_new_cb(GSimpleAction* action,
 }
 
 static void
-app_action_close_cb(GSimpleAction* action,
-                    GVariant* parameter,
+app_action_close_cb(GSimpleAction* action [[maybe_unused]],
+                    GVariant* parameter [[maybe_unused]],
                     void* data)
 {
         GtkApplication* application = GTK_APPLICATION(data);
@@ -4697,7 +4697,7 @@ app_clipboard_owner_change_cb(GtkClipboard* clipboard,
 
 static void
 app_clipboard_changed_cb(GdkClipboard* clipboard,
-                         VteappApplication* application)
+                         VteappApplication* application [[maybe_unused]])
 {
         auto formats = gdk_clipboard_get_formats(clipboard);
         auto str = vte::glib::take_string(gdk_content_formats_to_string(formats));
@@ -4833,8 +4833,8 @@ vteapp_application_startup(GApplication* application)
 
         /* Create actions */
         GActionEntry const entries[] = {
-                { "new",   app_action_new_cb,   nullptr, nullptr, nullptr },
-                { "close", app_action_close_cb, nullptr, nullptr, nullptr },
+                { "new",   app_action_new_cb,   nullptr, nullptr, nullptr, {} },
+                { "close", app_action_close_cb, nullptr, nullptr, nullptr, {} },
         };
 
         GActionMap* map = G_ACTION_MAP(application);

@@ -68,8 +68,8 @@ _vte_debug_init(void)
 }
 
 const char *
-_vte_debug_sequence_to_string(const char *str,
-                              gssize length)
+_vte_debug_sequence_to_string(const char *str [[maybe_unused]],
+                              gssize length [[maybe_unused]])
 {
 #if VTE_DEBUG
         static const char codes[][6] = {
@@ -151,9 +151,9 @@ hexdump_line(GString* str,
 #endif /* VTE_DEBUG */
 
 void
-_vte_debug_hexdump(char const* str,
-                   uint8_t const* buf,
-                   size_t len)
+_vte_debug_hexdump(char const* str [[maybe_unused]],
+                   uint8_t const* buf [[maybe_unused]],
+                   size_t len [[maybe_unused]])
 {
 #if VTE_DEBUG
         GString* s = g_string_new(str);

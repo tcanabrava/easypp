@@ -108,7 +108,7 @@ writing their first program with more than one file.
     [IDE projects (Code::Blocks, VS)], [XML project file edited through dialogs], [IDE template], [—/plug-ins], [Dialogs], [Wizard],
     [vcpkg @vcpkg, Conan @conan], [Package acquisition only; used together with a build system], [n/a], [n/a], [n/a], [Manifest],
     [Cargo (Rust) @cargo-targets], [`Cargo.toml` + folder conventions], [Lints on], [`cargo test`], [Modules: none; crates: `Cargo.toml`], [`cargo new`],
-    [*#easypp*], [*Folder conventions only*], [*`-Wall`* \ *`-pedantic`* \ *`-Werror`*, *sanitizers in debug*], [*`easypp test`* (parallel, time limit)], [*Found from `#include`s*], [*`easypp new`*],
+    [*#easypp*], [*Folder conventions only*], [*`-Wall`* \ *`-Wextra`* \ *`-pedantic`* \ *`-Werror`*, *sanitizers in debug*], [*`easypp test`* (parallel, time limit)], [*Found from `#include`s*], [*`easypp new`*],
   )},
   caption: [Build and project tools from a beginner's point of view. CMake, Meson and Make were measured
   (@sec-eval); the other rows come from each tool's documentation.],
@@ -313,7 +313,7 @@ project. `easypp clean` deletes the cache with the rest of `build/`.
     table.header[*Setting*][*Value*],
     [Compilers], [`clang` for `.c`, `clang++` for `.cpp/.cc/.cxx`; executables containing C++ link with `clang++`],
     [Language], [`-std=c17`, `-std=c++23` (no GNU extensions)],
-    [Diagnostics], [`-Wall -pedantic -Werror` for the project's code; `-w` for third-party sources],
+    [Diagnostics], [`-Wall -Wextra -pedantic -Werror` for the project's code; `-w` for third-party sources],
     [Profiles], [debug `-O0 -g` with AddressSanitizer and UBSan, undefined behaviour fatal (default); `--release` gives `-O2 -DNDEBUG`],
     [Third-party and system headers], [`-isystem`, so their warnings are not the student's problem],
     [Tests], [in parallel, 60 s limit each, output shown only for failures],
@@ -369,12 +369,12 @@ Its dependency structure is deliberately layered:
 SDL, so the tool must find the SDL dependency transitively.
 
 For CMake, Meson and Make we wrote the shortest idiomatic build description we
-could that reproduces #easypp's behaviour. That means the same flags, C++23,
+could that reproduced #easypp's behaviour at the time. That means the same flags, C++23,
 sanitizers in debug builds, tests registered with the tool's test runner, and
 SDL2 through pkg-config. The CMake version uses modern target-based commands. All
 files are in `eval/`. `eval/run.sh` reruns the Blockfall measurements from fresh
 source copies. The archived output in `eval/results.txt` comes from 20 November
-2026 and predates Conan and module support. The versions were Clang 23.1.5, CMake 4.5.0 (Ninja
+2026 and predates Conan support, module support and the addition of `-Wextra`. The versions were Clang 23.1.5, CMake 4.5.0 (Ninja
 generator), Meson 1.12.1, Ninja 1.13.2 and GNU Make 4.4.1, on a 16-thread Linux machine.
 
 == Build code a student must write <sec-size>

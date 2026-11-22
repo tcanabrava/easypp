@@ -160,7 +160,11 @@ endif()
         w,
         "# The project's own code: every warning is an error. Third-party code: no warnings."
     );
-    let _ = writeln!(w, "set(EASYPP_WARNINGS -Wall -pedantic -Werror)\n");
+    let _ = writeln!(
+        w,
+        "set(EASYPP_WARNINGS {})\n",
+        crate::builder::WARNINGS.join(" ")
+    );
     let _ = writeln!(
         w,
         "# Debug builds: AddressSanitizer and UBSan, as in easypp."

@@ -115,7 +115,7 @@ options or `easypp help deps add` for a nested command.
   pkg-config (`/usr/lib/qt6/moc` and so on), not PATH.
 - **Compilers**: `.c` files use `clang -std=c17`; `.cpp`/`.cc`/`.cxx` files use
   `clang++ -std=c++23`. Executables that contain any C++ are linked with clang++.
-  The flags are always `-Wall -pedantic -Werror`.
+  The warning flags are `-Wall -Wextra -pedantic -Werror`.
 - **KDE Frameworks 6**: installed KDE imported-target metadata supplies include
   paths and public library dependencies when no pkg-config package is available.
   This reads literal system export properties, without invoking CMake or requiring

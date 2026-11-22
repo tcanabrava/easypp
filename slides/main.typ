@@ -293,7 +293,7 @@
     ```text
     clang / clang++
     -std=c17 / -std=c++23
-    -Wall -pedantic -Werror
+    -Wall -Wextra -pedantic -Werror
     ```
   ], [
     #label[Debug is the default]
