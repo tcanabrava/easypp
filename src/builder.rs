@@ -252,44 +252,23 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
                 .chain(&c.resources)
                 .map(move |s| (s, c.cflags.as_slice()))
         });
-    let jobs: Vec<Job> = units
-        .map(|(src, cflags)| {
-            let obj = object_path(opts, src);
-            let cmd = compile_command(project, opts, src, &obj, cflags);
-            (src, obj, cmd)
-        })
-        .filter(|(_, obj, cmd)| {
-            !depfile_inputs(&depfile_path(obj)).is_some_and(|inputs| up_to_date(obj, cmd, &inputs))
-        })
-        .map(|(src, obj, cmd)| Job {
-            verb: "Compiling",
-            label: src.display().to_string(),
-            output: obj,
-            cmd,
-            compiler: true,
-        })
-        .collect();
-    let mut jobs = jobs;
+    let sanitizer = sanitizer_defaults_source(opts);
     if opts.sanitizers() {
-        let src = sanitizer_defaults_source(opts);
-        if fs::read_to_string(&src).ok().as_deref() != Some(SANITIZER_DEFAULTS) {
+        let src = &sanitizer;
+        if fs::read_to_string(src).ok().as_deref() != Some(SANITIZER_DEFAULTS) {
             fs::create_dir_all(src.parent().unwrap())
-                .and_then(|_| fs::write(&src, SANITIZER_DEFAULTS))
+                .and_then(|_| fs::write(src, SANITIZER_DEFAULTS))
                 .map_err(|e| format!("cannot write {}: {e}", src.display()))?;
         }
-        let obj = object_path(opts, &src);
-        let cmd = compile_command(project, opts, &src, &obj, &[]);
-        if !depfile_inputs(&depfile_path(&obj)).is_some_and(|i| up_to_date(&obj, &cmd, &i)) {
-            jobs.push(Job {
-                verb: "Compiling",
-                label: "sanitizer defaults".into(),
-                output: obj,
-                cmd,
-                compiler: true,
-            });
-        }
     }
-    run_jobs(jobs, opts, project)?;
+    let sanitizer_unit = opts.sanitizers().then_some((sanitizer.as_path(), &[][..]));
+    compile_units(
+        project,
+        opts,
+        units
+            .map(|(src, flags)| (src.as_path(), flags))
+            .chain(sanitizer_unit),
+    )?;
 
     // 3. One static archive per library that has objects.
     let ar = if crate::system::in_path("llvm-ar") {
@@ -396,6 +375,9 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
     for c in components {
         for src in c.sources.iter().chain(&c.resources) {
             expected.insert(object_path(opts, src));
+            if project.modules.provides(src) {
+                expected.insert(bmi_path(opts, src));
+            }
         }
         for step in c.plan.ui.iter().chain(&c.plan.generate) {
             expected.insert(step.output.clone());
@@ -484,9 +466,51 @@ fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result
     )
 }
 
-/// Runs the Qt code generators for every library, program and test, without
-/// compiling anything: generated headers such as ui_*.h then exist for the
-/// editor. Used by `easypp watch`.
+fn compile_units<'a>(
+    project: &Project,
+    opts: &Options,
+    units: impl Iterator<Item = (&'a Path, &'a [String])>,
+) -> Result<(), String> {
+    // A provider emits its object and BMI together. Each wave waits for the
+    // previous one before checking timestamps, so rebuilt BMIs invalidate users.
+    let mut waves = BTreeMap::<usize, Vec<(&Path, &[String])>>::new();
+    for (src, cflags) in units {
+        let depth = project.modules.plan(src).map_or(0, |plan| plan.depth);
+        waves.entry(depth).or_default().push((src, cflags));
+    }
+    for units in waves.into_values() {
+        let jobs = units
+            .into_iter()
+            .filter_map(|(src, cflags)| {
+                let obj = object_path(opts, src);
+                let cmd = compile_command(project, opts, src, &obj, cflags);
+                let fresh = (!project.modules.provides(src) || bmi_path(opts, src).is_file())
+                    && depfile_inputs(&depfile_path(&obj)).is_some_and(|mut inputs| {
+                        if let Some(plan) = project.modules.plan(src) {
+                            inputs.extend(
+                                plan.imports
+                                    .iter()
+                                    .map(|name| bmi_path(opts, project.modules.provider(name))),
+                            );
+                        }
+                        up_to_date(&obj, &cmd, &inputs)
+                    });
+                (!fresh).then(|| Job {
+                    verb: "Compiling",
+                    label: src.display().to_string(),
+                    output: obj,
+                    cmd,
+                    compiler: true,
+                })
+            })
+            .collect();
+        run_jobs(jobs, opts, project)?;
+    }
+
+    Ok(())
+}
+
+/// Generate framework sources and compile module providers for editor tools.
 pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
     let libs = lib_components(project, opts);
     let targets: Vec<Component> = project
@@ -496,7 +520,15 @@ pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
         .map(|t| target_component(project, opts, t))
         .collect();
     let plans: Vec<&qt::Plan> = libs.values().chain(&targets).map(|c| &c.plan).collect();
-    run_codegen(project, &plans, opts)
+    run_codegen(project, &plans, opts)?;
+    let providers = libs.values().chain(&targets).flat_map(|component| {
+        component
+            .sources
+            .iter()
+            .filter(|src| project.modules.provides(src))
+            .map(|src| (src.as_path(), component.cflags.as_slice()))
+    });
+    compile_units(project, opts, providers)
 }
 
 /// One command producing one file: a compilation or a code generator.
@@ -687,6 +719,21 @@ fn compile_command(
         cmd.extend(["-isystem".into(), path_str(dir)]);
     }
     cmd.extend(system_cflags.iter().cloned());
+    if project.modules.provides(src) {
+        cmd.extend([
+            "-x".into(),
+            "c++-module".into(),
+            format!("-fmodule-output={}", bmi_path(opts, src).display()),
+        ]);
+    }
+    if let Some(plan) = project.modules.plan(src) {
+        for name in &plan.imports {
+            cmd.push(format!(
+                "-fmodule-file={name}={}",
+                bmi_path(opts, project.modules.provider(name)).display()
+            ));
+        }
+    }
     cmd.extend([
         // -MD, not -MMD: -MMD leaves out headers found through -isystem, so
         // editing a src/thirdparty header would not rebuild its users.
@@ -787,6 +834,10 @@ fn object_path(opts: &Options, src: &Path) -> PathBuf {
         .or_else(|_| src.strip_prefix(&dir))
         .unwrap_or(src);
     with_suffix(&opts.dir().join("obj").join(rel), ".o")
+}
+
+fn bmi_path(opts: &Options, src: &Path) -> PathBuf {
+    with_suffix(&object_path(opts, src), ".pcm")
 }
 
 fn archive_path(opts: &Options, lib: &str) -> PathBuf {

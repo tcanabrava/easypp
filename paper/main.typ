@@ -557,7 +557,10 @@ serious limitation for teaching, since many students use Windows. Code::Blocks, 
 distributed for Windows with a bundled MinGW compiler @codeblocks. It does not download packages:
 system libraries must be installed, and third-party code must be copied into
 `src/thirdparty`. It has no per-target flags, code generation other than Qt's
-(moc, uic, rcc) and KDE KConfig, install step, shared libraries or C++20 modules. Modules would break the include-based discovery. These are not
+(moc, uic, rcc) and KDE KConfig, install step or shared libraries. Project-local C++
+modules are supported through explicit imports in source files. Header units,
+standard-library modules and modules from external packages are outside this scope.
+These are not
 oversights: each one would add a configuration surface. But they put a clear limit
 on where the tool can be used.
 

@@ -2,7 +2,8 @@
 //! with `src/`, so the editor's language server always knows every file and
 //! its flags (new libraries, new files, new system libraries). For Qt
 //! projects it also runs moc, uic and rcc, so generated headers such as
-//! `ui_form.h` exist as soon as the `.ui` file is saved.
+//! `ui_form.h` exist as soon as the `.ui` file is saved. It also builds the
+//! compiled interfaces needed by C++ module imports.
 //!
 //! It polls: every half second it lists `src/` with modification times and
 //! sizes, and when anything was added, removed or edited it rediscovers the

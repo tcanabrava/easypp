@@ -519,3 +519,45 @@ printf 'install\n' >>conan-calls
     build();
     assert_eq!(calls(), 2);
 }
+
+#[test]
+fn named_modules_link_and_rebuild_importers() {
+    let p = Project::new("cpp-modules");
+    p.remove("src");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/modules/src");
+    assert!(
+        Command::new("cp")
+            .arg("-R")
+            .arg(example)
+            .arg(&p.dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let first = p.ok(&["run", "--release", "-j4"]);
+    assert!(first.lines().any(|line| line == "35"), "{first}");
+    assert!(!p.ok(&["build", "--release"]).contains("Compiling"));
+
+    let interface = "src/libs/arithmetic/operations.cppm";
+    p.write(
+        interface,
+        "export module arithmetic:operations;\nexport int double_value(int n) { return 3*n; }\n",
+    );
+    let updated = p.ok(&["run", "--release", "-j4"]);
+    assert!(updated.lines().any(|line| line == "49"), "{updated}");
+    assert!(updated.contains("Compiling src/bin/demo.cpp"), "{updated}");
+
+    let bmi = "build/release/obj/libs/arithmetic/operations.cppm.o.pcm";
+    p.remove(bmi);
+    p.ok(&["build", "--release"]);
+    assert!(p.exists(bmi));
+
+    p.write(
+        interface,
+        "export module arithmetic:operations;\nimport report;\n",
+    );
+    assert!(
+        p.fails(&["build", "--release"])
+            .contains("module import cycle")
+    );
+}

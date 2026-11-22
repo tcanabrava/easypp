@@ -53,6 +53,14 @@ options or `easypp help deps add` for a nested command.
   whatever includes its headers; files defining `main()` and folders such as
   `examples/` or `tests/` are left out. The
   system's default include and library folders are used as usual.
+- **C++ named modules**: put interfaces and partitions (for example, `.cppm`
+  files) next to the other sources in a library or multi-file executable.
+  `import name;` discovers the provider and links its library. Clang builds
+  compiled module interfaces before their importers, and interface changes
+  invalidate dependent objects. See the [modules example](examples/modules/README.md).
+  Module declarations and imports must be written directly in source files.
+  Header units, `import std`, and modules supplied by external packages are
+  outside the current support.
 - **System libraries** (Linux): `#include` a system header and easypp
   links the library that provides it. It checks these rules in order:
   1. A pkg-config package named like the header: `<SDL2/SDL.h>` → `sdl2`,

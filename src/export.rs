@@ -115,7 +115,12 @@ fn cmake(project: &Project) -> String {
         w,
         "# Each folder in src/libs, src/bin and src/tests is the target it was in easypp.\n"
     );
-    let _ = writeln!(w, "cmake_minimum_required(VERSION 3.25)");
+    let version = if project.modules.is_empty() {
+        "3.25"
+    } else {
+        "3.28"
+    };
+    let _ = writeln!(w, "cmake_minimum_required(VERSION {version})");
     let _ = writeln!(w, "project({name} LANGUAGES C CXX)\n");
     let _ = writeln!(
         w,
@@ -209,7 +214,7 @@ fn cmake(project: &Project) -> String {
     }
 
     for name in &project.lib_order {
-        library(w, project.libs.get(name).unwrap(), &lib_target);
+        library(w, project, project.libs.get(name).unwrap(), &lib_target);
     }
 
     if !project.tests.is_empty() {
@@ -240,9 +245,29 @@ fn kconfig_sources(
     sources.push(format!("${{{var}}}"));
 }
 
-fn library(w: &mut String, lib: &Library, names: &BTreeMap<&str, String>) {
+fn module_sources(project: &Project, sources: &[std::path::PathBuf]) -> (Vec<String>, Vec<String>) {
+    let (modules, ordinary): (Vec<_>, Vec<_>) = sources
+        .iter()
+        .partition(|src| project.modules.provides(src));
+    (
+        ordinary.into_iter().map(|src| path(src)).collect(),
+        modules.into_iter().map(|src| path(src)).collect(),
+    )
+}
+
+fn export_modules(w: &mut String, target: &str, visibility: &str, modules: Vec<String>) {
+    if !modules.is_empty() {
+        let _ = writeln!(
+            w,
+            "target_sources({target} {visibility} FILE_SET CXX_MODULES FILES {})",
+            list(modules)
+        );
+    }
+}
+
+fn library(w: &mut String, project: &Project, lib: &Library, names: &BTreeMap<&str, String>) {
     let target = &names[lib.name.as_str()];
-    let mut sources: Vec<String> = lib.sources.iter().map(|s| path(s)).collect();
+    let (mut sources, modules) = module_sources(project, &lib.sources);
     kconfig_sources(w, &lib.qt, target, &mut sources);
     // Listed so AUTOMOC/AUTOUIC see every Q_OBJECT header and .ui form.
     let moc_headers = lib
@@ -265,7 +290,7 @@ fn library(w: &mut String, lib: &Library, names: &BTreeMap<&str, String>) {
     };
 
     let _ = writeln!(w, "# {}", path(&lib.dir));
-    if sources.is_empty() {
+    if sources.is_empty() && modules.is_empty() {
         let _ = writeln!(w, "add_library({target} INTERFACE)");
         let system = if lib.third_party { "SYSTEM " } else { "" };
         let _ = writeln!(
@@ -281,6 +306,7 @@ fn library(w: &mut String, lib: &Library, names: &BTreeMap<&str, String>) {
         }
     } else {
         let _ = writeln!(w, "add_library({target} STATIC {})", list(sources));
+        export_modules(w, target, "PUBLIC", modules);
         if target != &lib.name {
             let _ = writeln!(
                 w,
@@ -312,7 +338,7 @@ fn library(w: &mut String, lib: &Library, names: &BTreeMap<&str, String>) {
 }
 
 fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<&str, String>) {
-    let mut sources: Vec<String> = target.sources.iter().map(|s| path(s)).collect();
+    let (mut sources, modules) = module_sources(project, &target.sources);
     kconfig_sources(w, &target.qt, &target.name, &mut sources);
     let moc_headers = target
         .qt
@@ -373,6 +399,7 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
 
     let name = &target.name;
     let _ = writeln!(w, "add_executable({name} {})", list(sources));
+    export_modules(w, name, "PRIVATE", modules);
     let _ = writeln!(
         w,
         "target_include_directories({name} PRIVATE {} ${{CMAKE_CURRENT_BINARY_DIR}})",

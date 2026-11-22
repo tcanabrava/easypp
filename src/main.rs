@@ -6,6 +6,7 @@ mod cond;
 mod export;
 mod hints;
 mod kde;
+mod modules;
 mod project;
 mod qt;
 mod scaffold;

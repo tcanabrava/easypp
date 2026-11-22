@@ -32,7 +32,7 @@ impl Lang {
     pub fn of(path: &Path) -> Option<Lang> {
         match path.extension()?.to_str()? {
             "c" => Some(Lang::C),
-            "cpp" | "cc" | "cxx" | "c++" => Some(Lang::Cpp),
+            "cpp" | "cc" | "cxx" | "c++" | "cppm" | "ixx" | "ccm" | "cxxm" => Some(Lang::Cpp),
             _ => None,
         }
     }
@@ -101,6 +101,7 @@ pub struct Project {
     pub system_includes: Vec<PathBuf>,
     /// moc/uic/rcc, when some component needs them.
     pub qt_tools: Option<QtTools>,
+    pub modules: crate::modules::Modules,
 }
 
 pub const LIBS_DIR: &str = "src/libs";
@@ -213,12 +214,26 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         None => System::detect(),
     };
 
+    for lib in libs.values_mut().filter(|lib| lib.third_party) {
+        // Vendored example programs are not part of the library.
+        lib.sources.retain(|s| !resolver.defines_main(s));
+    }
+    let modules = crate::modules::Modules::discover(
+        libs.values()
+            .flat_map(|lib| {
+                lib.sources
+                    .iter()
+                    .cloned()
+                    .map(|src| (src, Some(lib.name.clone())))
+            })
+            .chain(
+                [BIN_DIR, TESTS_DIR]
+                    .into_iter()
+                    .flat_map(|dir| walk(Path::new(dir)))
+                    .map(|src| (src, None)),
+            ),
+    )?;
     for lib in libs.values_mut() {
-        if lib.third_party {
-            // Example programs and command-line tools (sqlite's shell.c) have
-            // their own main(); they are not part of the library.
-            lib.sources.retain(|s| !resolver.defines_main(s));
-        }
         let files = if lib.third_party {
             thirdparty_files(&lib.dir)
         } else {
@@ -226,6 +241,8 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         };
         let scan = resolver.scan(files.clone(), Some(&lib.name));
         lib.deps = scan.libs;
+        lib.deps
+            .extend(modules.libraries(&lib.sources, Some(&lib.name))?);
         lib.system = scan
             .external
             .iter()
@@ -261,6 +278,7 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         system: &system,
         libs: &libs,
         lib_order: &lib_order,
+        modules: &modules,
     };
     let bins = discover_targets(Path::new(BIN_DIR), Kind::Bin, &ctx)?;
     let tests = discover_targets(Path::new(TESTS_DIR), Kind::Test, &ctx)?;
@@ -310,6 +328,7 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         tests,
         system_includes,
         qt_tools,
+        modules,
     })
 }
 
@@ -318,6 +337,7 @@ struct Context<'a> {
     system: &'a System,
     libs: &'a BTreeMap<String, Library>,
     lib_order: &'a [String],
+    modules: &'a crate::modules::Modules,
 }
 
 fn resource_dep(files: &QtFiles, system: &System) -> Result<Option<SysDep>, String> {
@@ -371,7 +391,9 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
         }
 
         let scan = ctx.resolver.scan(files.clone(), None);
-        let libs = link_order(&scan.libs, ctx.libs, ctx.lib_order);
+        let mut dependencies = scan.libs;
+        dependencies.extend(ctx.modules.libraries(&sources, None)?);
+        let libs = link_order(&dependencies, ctx.libs, ctx.lib_order);
         // A folder target owns its .ui/.qrc files; a single-file target has none.
         let qt = QtFiles::from_files(if entry.is_dir() { &files } else { &[] }, scan.moc);
 
