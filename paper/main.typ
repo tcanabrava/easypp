@@ -558,7 +558,9 @@ distributed for Windows with a bundled MinGW compiler @codeblocks. It does not d
 system libraries must be installed, and third-party code must be copied into
 `src/thirdparty`. It has no per-target flags, code generation other than Qt's
 (moc, uic, rcc) and KDE KConfig, install step or shared libraries. Project-local C++
-modules and header units are supported through explicit imports in source files.
+modules and header units are supported through explicit imports. For
+named-module projects, Clang dependency scanning can also discover imports in
+included headers.
 Easypp can build standard-library modules when the installed toolchain ships
 their source manifest. Named modules from external packages are outside this
 scope. CMake export supports project-local named modules and standard-library

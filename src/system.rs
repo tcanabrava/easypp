@@ -753,6 +753,11 @@ fn find_in_path(program: &str) -> Option<PathBuf> {
         .map(|p| fs::canonicalize(&p).unwrap_or(p))
 }
 
+pub(crate) fn compiler_identity() -> String {
+    let path = find_in_path("clang++");
+    format!("{path:?} {}", stamp(path.as_deref()))
+}
+
 /// "mtime size" of a file or folder, or "missing".
 fn stamp(path: Option<&Path>) -> String {
     let Some(meta) = path.and_then(|p| fs::metadata(p).ok()) else {

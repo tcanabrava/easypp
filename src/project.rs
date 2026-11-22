@@ -128,7 +128,11 @@ pub fn find_root(start: &Path) -> Result<PathBuf, String> {
 /// Discovers the project. The current directory must be the project root.
 /// With a cache, unchanged files are not re-read and the system is not
 /// re-detected.
-pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, String> {
+pub fn discover(
+    root: &Path,
+    opts: &crate::builder::Options,
+    mut cache: Option<&mut Cache>,
+) -> Result<Project, String> {
     // Libraries.
     let mut libs = BTreeMap::new();
     for entry in sorted_entries(Path::new(LIBS_DIR)) {
@@ -218,6 +222,7 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         // Vendored example programs are not part of the library.
         lib.sources.retain(|s| !resolver.defines_main(s));
     }
+    let mut scan_flags = HashMap::new();
     let modules = crate::modules::Modules::discover(
         libs.values()
             .flat_map(|lib| {
@@ -232,6 +237,50 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
                     .flat_map(|dir| walk(Path::new(dir)))
                     .map(|src| (src, None)),
             ),
+        opts,
+        |src, owner| {
+            let component = owner
+                .map(|name| libs[name].dir.as_path())
+                .unwrap_or_else(|| {
+                    let mut ancestors = src.ancestors();
+                    ancestors
+                        .find(|path| {
+                            path.parent().is_some_and(|parent| {
+                                parent == Path::new(BIN_DIR) || parent == Path::new(TESTS_DIR)
+                            })
+                        })
+                        .unwrap_or(src)
+                });
+            let flags = scan_flags
+                .entry(component.to_path_buf())
+                .or_insert_with(|| {
+                    // Resolve ordinary includes first so the scanner sees installed
+                    // package headers and any defines those packages supply.
+                    let empty = crate::modules::Modules::default();
+                    let mut pending = vec![component.to_path_buf()];
+                    let mut visited = HashSet::new();
+                    let mut dependencies = BTreeSet::new();
+                    while let Some(path) = pending.pop() {
+                        if !visited.insert(path.clone()) {
+                            continue;
+                        }
+                        let files = if path.is_file() {
+                            vec![path]
+                        } else {
+                            walk(&path)
+                        };
+                        let scan = resolver.scan(files, None, &empty);
+                        dependencies.extend(
+                            scan.external
+                                .iter()
+                                .filter_map(|header| system.resolve(header)),
+                        );
+                        pending.extend(scan.libs.iter().map(|name| libs[name].dir.clone()));
+                    }
+                    system.compile_flags(&dependencies)
+                });
+            crate::builder::source_flags(opts, src, &system_includes, flags)
+        },
     )?;
     for lib in libs.values_mut() {
         let files = if lib.third_party {

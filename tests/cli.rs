@@ -630,3 +630,62 @@ fn standard_library_modules_build_on_demand() {
     assert_eq!(outputs(), 2);
     assert!(!p.ok(&["build", "--release"]).contains("Compiling"));
 }
+
+#[test]
+#[ignore = "requires clang-scan-deps"]
+fn module_scanner_follows_headers_and_compiler_changes_rebuild_modules() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let p = Project::new("module-scanner");
+    p.remove("src/bin/hello.cpp");
+    p.write(
+        "src/libs/math/math.cppm",
+        "export module math;\nexport int answer() { return 42; }\n",
+    );
+    p.write(
+        "src/bin/imports.hpp",
+        "#ifdef NDEBUG\nimport math;\n#else\nimport debug_only;\n#endif\n",
+    );
+    p.write(
+        "src/bin/check.cpp",
+        "#include \"imports.hpp\"\nint main() { return answer() != 42; }\n",
+    );
+    p.ok(&["run", "--release"]);
+    assert!(!p.ok(&["build", "--release"]).contains("Compiling"));
+    assert!(p.fails(&["build"]).contains("debug_only"));
+
+    let old = fs::read_to_string(p.dir.join("build/release/module-compiler")).unwrap();
+    let compiler = Command::new("sh")
+        .args(["-c", "command -v clang++"])
+        .output()
+        .unwrap();
+    assert!(compiler.status.success());
+    let compiler = std::str::from_utf8(&compiler.stdout).unwrap().trim();
+    p.write(
+        "tools/clang++",
+        &format!("#!/bin/sh\nexec '{compiler}' \"$@\"\n"),
+    );
+    fs::set_permissions(
+        p.dir.join("tools/clang++"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let original_path = std::env::var_os("PATH").unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(p.dir.join("tools")).chain(std::env::split_paths(&original_path)),
+    )
+    .unwrap();
+    let out = Command::new(easypp())
+        .args(["build", "--release"])
+        .current_dir(&p.dir)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("Compiling src/libs/math/math.cppm"));
+    assert!(text(&out).contains("Compiling src/bin/check.cpp"));
+    assert_ne!(
+        fs::read_to_string(p.dir.join("build/release/module-compiler")).unwrap(),
+        old
+    );
+}

@@ -35,16 +35,27 @@ pub struct Plan {
 impl Modules {
     pub fn discover(
         sources: impl Iterator<Item = (PathBuf, Option<String>)>,
+        opts: &crate::builder::Options,
+        flags: impl FnMut(&Path, Option<&str>) -> Vec<String>,
     ) -> Result<Self, String> {
         let mut graph = Self::default();
-        for (path, library) in sources {
-            if crate::project::Lang::of(&path) != Some(crate::project::Lang::Cpp) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let unit = parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut sources: Vec<_> = sources
+            .filter(|(path, _)| crate::project::Lang::of(path) == Some(crate::project::Lang::Cpp))
+            .filter_map(|(path, library)| {
+                let text = fs::read_to_string(&path).ok()?;
+                let unit = parse(&text);
+                Some((path, library, unit))
+            })
+            .collect();
+        // Direct declarations are a cheap indication that the project uses
+        // named modules. The scanner can also find imports in included headers.
+        if sources
+            .iter()
+            .any(|(_, _, unit)| unit.provides.is_some() || !unit.imports.is_empty())
+        {
+            scan_named_modules(&mut sources, opts, flags);
+        }
+        for (path, library, unit) in sources {
             if let Some(name) = &unit.provides
                 && let Some((previous, _)) = graph
                     .providers
@@ -249,6 +260,95 @@ impl Modules {
     }
 }
 
+fn scan_named_modules(
+    sources: &mut [(PathBuf, Option<String>, Unit)],
+    opts: &crate::builder::Options,
+    mut flags: impl FnMut(&Path, Option<&str>) -> Vec<String>,
+) {
+    if !crate::system::in_path("clang-scan-deps") {
+        return;
+    }
+    let Ok(directory) = std::env::current_dir() else {
+        return;
+    };
+    let entries: Vec<_> = sources.iter().enumerate()
+        // P1689 can't scan a header-unit import before its PCM exists.
+        .filter(|(_, (_, _, unit))| unit.headers.is_empty())
+        .map(|(index, (src, library, unit))| {
+            let output = format!("easypp-scan-{index}.o");
+            let mut arguments = flags(src, library.as_deref());
+            if unit.provides.is_some() || matches!(src.extension().and_then(|s| s.to_str()), Some("cppm" | "ixx" | "ccm" | "cxxm")) {
+                arguments.extend(["-x".into(), "c++".into()]);
+            }
+            arguments.extend(["-c".into(), src.display().to_string(), "-o".into(), output.clone()]);
+            serde_json::json!({ "directory": directory, "file": src, "output": output, "arguments": arguments })
+        }).collect();
+    if entries.is_empty() {
+        return;
+    }
+
+    // The database is private to this invocation, even during concurrent scans.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let db = std::env::temp_dir().join(format!("easypp-scan-{}-{nonce}.json", std::process::id()));
+    let Ok(file) = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&db)
+    else {
+        return;
+    };
+    let result = serde_json::to_writer(file, &entries).ok().and_then(|()| {
+        Command::new("clang-scan-deps")
+            .arg("-format=p1689")
+            .arg(format!("-compilation-database={}", db.display()))
+            .arg("-j")
+            .arg(opts.jobs.to_string())
+            .output()
+            .ok()
+    });
+    let _ = fs::remove_file(&db);
+    let Some(output) = result else { return };
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return;
+    };
+    let Some(rules) = document["rules"].as_array() else {
+        return;
+    };
+    for rule in rules {
+        let Some(index) = rule["primary-output"]
+            .as_str()
+            .and_then(|output| {
+                Path::new(output)
+                    .file_name()?
+                    .to_str()?
+                    .strip_prefix("easypp-scan-")
+            })
+            .and_then(|output| output.strip_suffix(".o")?.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let Some((_, _, unit)) = sources.get_mut(index) else {
+            continue;
+        };
+        // Failed units (for example those needing generated Qt headers) can be
+        // absent from otherwise valid output. Leave their source-text plan intact.
+        unit.provides = rule["provides"]
+            .as_array()
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry["logical-name"].as_str())
+            .map(str::to_owned);
+        unit.imports = rule["requires"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["logical-name"].as_str().map(str::to_owned))
+            .collect();
+    }
+}
+
 fn standard_manifest() -> Result<PathBuf, String> {
     let query = |arg: &str| -> Option<PathBuf> {
         let output = Command::new("clang++").arg(arg).output().ok()?;
@@ -313,11 +413,11 @@ fn visit(
     Ok(())
 }
 
-fn parse(text: &str) -> Result<Unit, String> {
+fn parse(text: &str) -> Unit {
     // Skip ordinary sources quickly, then mask comments and literals before
     // looking at statements. Like include discovery, this is not a preprocessor.
     if !text.contains("module") && !text.contains("import") {
-        return Ok(Unit::default());
+        return Unit::default();
     }
     let spliced = text.replace("\\\r\n", "").replace("\\\n", "");
     let text = mask_comments_and_literals(&spliced);
@@ -394,7 +494,7 @@ fn parse(text: &str) -> Result<Unit, String> {
             unit.imports.extend(name);
         }
     }
-    Ok(unit)
+    unit
 }
 
 fn keyword<'a>(text: &'a str, word: &str) -> Option<&'a str> {

@@ -161,7 +161,7 @@ pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Pro
     } else {
         None
     };
-    let project = project::discover(root, cache.as_mut())?;
+    let project = project::discover(root, opts, cache.as_mut())?;
     if opts.verbose {
         match &cache {
             Some(c) if c.redetected() => {

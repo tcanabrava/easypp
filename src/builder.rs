@@ -176,7 +176,7 @@ fn component(
     }
     let mut plan = match &project.qt_tools {
         Some(tools) if qt_files.needs_qt() => {
-            let mut flags = base_includes(project);
+            let mut flags = base_includes();
             flags.extend(cflags.iter().cloned());
             qt::plan(tools, qt_files, &gen_dir(opts, key), &qt::moc_flags(&flags))
         }
@@ -536,6 +536,19 @@ fn header_unit(
     (output, cmd)
 }
 
+/// A compiler replacement can invalidate every PCM, even when its source
+/// files and flags did not change or the replacement's timestamp is older.
+fn module_compiler_stamp(opts: &Options) -> Result<PathBuf, String> {
+    let path = opts.dir().join("module-compiler");
+    let identity = crate::system::compiler_identity();
+    if fs::read_to_string(&path).ok().as_deref() != Some(identity.as_str()) {
+        fs::create_dir_all(opts.dir())
+            .and_then(|_| fs::write(&path, identity))
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    }
+    Ok(path)
+}
+
 fn compile_header_units<'a>(
     project: &Project,
     opts: &Options,
@@ -543,12 +556,18 @@ fn compile_header_units<'a>(
 ) -> Result<(), String> {
     let mut seen = HashSet::new();
     let mut jobs = Vec::new();
+    let mut compiler = None;
     for (src, flags) in units {
         for header in project.modules.headers(src) {
+            if compiler.is_none() {
+                compiler = Some(module_compiler_stamp(opts)?);
+            }
             let (output, cmd) = header_unit(project, opts, src, flags, header);
             if seen.insert(output.clone())
-                && !depfile_inputs(&depfile_path(&output))
-                    .is_some_and(|inputs| up_to_date(&output, &cmd, &inputs))
+                && !depfile_inputs(&depfile_path(&output)).is_some_and(|mut inputs| {
+                    inputs.extend(compiler.iter().cloned());
+                    up_to_date(&output, &cmd, &inputs)
+                })
             {
                 jobs.push(Job {
                     verb: "Precompiling",
@@ -575,6 +594,9 @@ fn compile_units<'a>(
         let depth = project.modules.plan(src).map_or(0, |plan| plan.depth);
         waves.entry(depth).or_default().push((src, cflags));
     }
+    let compiler = (!project.modules.is_empty())
+        .then(|| module_compiler_stamp(opts))
+        .transpose()?;
     for units in waves.into_values() {
         compile_header_units(project, opts, units.iter().copied())?;
         let jobs =
@@ -587,6 +609,7 @@ fn compile_units<'a>(
                         (!project.modules.provides(src) || bmi_path(opts, src).is_file())
                             && depfile_inputs(&depfile_path(&obj)).is_some_and(|mut inputs| {
                                 if let Some(plan) = project.modules.plan(src) {
+                                    inputs.extend(compiler.iter().cloned());
                                     inputs.extend(plan.imports.iter().map(|name| {
                                         bmi_path(opts, project.modules.provider(name))
                                     }));
@@ -795,7 +818,7 @@ fn driver(lang: Lang) -> &'static str {
 /// header is always included as `"mylib/header.hpp"`. (A library's own
 /// headers can also be included as `"header.hpp"`: quoted includes are looked
 /// up next to the including file first.)
-fn base_includes(_project: &Project) -> Vec<String> {
+fn base_includes() -> Vec<String> {
     vec![format!("-I{}", crate::project::LIBS_DIR)]
 }
 
@@ -803,6 +826,19 @@ fn compile_flags(
     project: &Project,
     opts: &Options,
     src: &Path,
+    system_cflags: &[String],
+) -> Vec<String> {
+    let mut flags = source_flags(opts, src, &project.system_includes, system_cflags);
+    if project.modules.is_standard_source(src) {
+        flags.push("-w".into());
+    }
+    flags
+}
+
+pub(crate) fn source_flags(
+    opts: &Options,
+    src: &Path,
+    system_includes: &[PathBuf],
     system_cflags: &[String],
 ) -> Vec<String> {
     let lang = Lang::of(src).expect("only sources are compiled");
@@ -816,7 +852,7 @@ fn compile_flags(
         (Lang::Cpp, true) => "-std=gnu++23",
     };
     let mut cmd: Vec<String> = vec![driver(lang).into(), std.into()];
-    if third_party || project.modules.is_standard_source(src) {
+    if third_party {
         cmd.push("-w".into());
     } else {
         cmd.extend(WARNINGS.map(String::from));
@@ -829,8 +865,8 @@ fn compile_flags(
     if opts.sanitizers() {
         cmd.extend(SANITIZE.map(String::from));
     }
-    cmd.extend(base_includes(project));
-    for dir in &project.system_includes {
+    cmd.extend(base_includes());
+    for dir in system_includes {
         cmd.extend(["-isystem".into(), path_str(dir)]);
     }
     cmd.extend(system_cflags.iter().cloned());

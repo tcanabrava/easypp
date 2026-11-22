@@ -58,7 +58,11 @@ options or `easypp help deps add` for a nested command.
   `import name;` discovers the provider and links its library. Clang builds
   compiled module interfaces before their importers, and interface changes
   invalidate dependent objects. See the [modules example](examples/modules/README.md).
-  Module declarations and imports must be written directly in source files.
+  When source declarations identify a named-module project, easypp also uses
+  `clang-scan-deps` if installed to discover imports in included headers and
+  select imports from the active preprocessor branches. It falls back to
+  source-text discovery for units Clang cannot scan before generation.
+  Changing the Clang executable invalidates cached compiled interfaces.
   Named modules supplied by external packages are outside the current support.
 - **Standard library modules**: `import std;` and `import std.compat;` use the
   module sources supplied by Clang's selected C++ standard library. Easypp
