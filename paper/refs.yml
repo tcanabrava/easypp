@@ -176,3 +176,27 @@ sweller1988:
     title: Cognitive Science
     volume: 12
     issue: 2
+
+conan-pkgconfig:
+  type: web
+  title: PkgConfigDeps
+  author: JFrog
+  url:
+    value: https://docs.conan.io/2/reference/tools/gnu/pkgconfigdeps.html
+    date: 2026-11-22
+
+clang-modules:
+  type: web
+  title: Standard C++ Modules
+  author: The LLVM Project
+  url:
+    value: https://clang.llvm.org/docs/StandardCPlusPlusModules.html
+    date: 2026-11-22
+
+cmake-modules:
+  type: web
+  title: CMake C++ Modules Manual, Version 4.5
+  author: Kitware
+  url:
+    value: https://cmake.org/cmake/help/v4.5/manual/cmake-cxxmodules.7.html
+    date: 2026-11-22

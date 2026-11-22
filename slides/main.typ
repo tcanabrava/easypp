@@ -43,7 +43,7 @@
   #v(1.1cm)
   #text(21pt)[Tomaz Canabrava]
   #v(0.5em)
-  #text(16pt, fill: muted)[From a multi-file program to a real KDE application]
+  #text(16pt, fill: muted)[From a first multi-file program to framework apps and C++ modules]
 ]
 
 #slide[Extract a library. Meet the linker.][
@@ -208,7 +208,68 @@
   #text(17pt)[Header ownership, package include paths and library names provide the clues.
   System headers use `-isystem`; system libraries use `--as-needed`.]
   #v(0.3em)
-  #text(17pt, fill: muted)[Dependencies must already be installed. easypp does not download packages.]
+  #text(17pt, fill: muted)[System dependencies are installed separately. A project can also declare packages through Conan.]
+]
+
+#slide[A fresh checkout can restore its packages][
+  #cols([
+    #label[Record what the project needs]
+    ```ini
+    # conanfile.txt
+    [requires]
+    zlib/1.3.1
+    nlohmann_json/3.12.0
+    gtest/1.17.0
+    ```
+    #text(17pt)[`easypp deps add` records a new requirement after installation.]
+  ], [
+    #label[Run the normal commands]
+    ```sh
+    easypp run --release
+    easypp test --release
+    easypp info --release
+    ```
+    #text(17pt)[The first run installs dependencies for the selected profile.
+    Subsequent runs reuse the generated package metadata.]
+  ])
+  #v(0.5em)
+  #note[#text(17pt)[Conan supplies `.pc` files. Source includes still determine which targets use a package.]]
+  #source[examples/conan-json. Verified actual header and archive paths with Clang depfiles and linker tracing.]
+]
+
+#slide[An import changes the compilation order][
+  #label[The example crosses two static libraries]
+  #v(0.45em)
+  #grid(
+    columns: (1fr, auto, 1fr, auto, 1fr), column-gutter: 0.35cm,
+    align: horizon,
+    note[`arithmetic`#linebreak()#text(16pt)[interface and partition]],
+    [→],
+    note[`report`#linebreak()#text(16pt)[imports arithmetic]],
+    [→],
+    note[`demo.cpp`#linebreak()#text(16pt)[imports report]],
+  )
+  #v(0.75em)
+  - Providers compile first and emit a compiled interface with their object.
+  - Imports also determine which static libraries the executable links.
+  - Interface edits and Clang changes invalidate cached module builds.
+  #source[examples/modules. Arrows show build order. Import relationships run in the opposite direction.]
+]
+
+#slide[Three ways to import in C++][
+  #table(columns: (1fr, 1.3fr, 1.55fr),
+    [Syntax], [Where it comes from], [How easypp handles it],
+    [`import report;`], [A project source], [Clang builds it before consumers.],
+    [`import <array>;`], [A header], [Clang precompiles it as a header unit.],
+    [`import std;`], [The toolchain], [Easypp locates the source through the installed module manifest.],
+  )
+  #v(0.45em)
+  #text(18pt)[For named-module projects, `clang-scan-deps` can find imports in
+  included headers and follow active preprocessor branches.]
+  #v(0.25em)
+  #text(16pt, fill: muted)[CMake export covers named modules, including `std` with CMake 4.5 and Ninja.
+  Header units build directly with easypp.]
+  #source[examples/modules, examples/header-units, examples/std-module. Demonstrations, separate from Blockfall timings.]
 ]
 
 #slide[Code generation follows the same rule][
@@ -365,7 +426,7 @@
   Later builds reuse system metadata and parsed include lists.]
   #v(0.35em)
   #text(17pt, fill: muted)[One Linux machine, 16 threads; median of three runs. These are not general build-system speed rankings.]
-  #source[Clang 23.1.5, CMake 4.5.0, Meson 1.12.1, Ninja 1.13.2, Make 4.4.1. paper/eval/results.txt.]
+  #source[Blockfall snapshot, 20 Nov 2026. Clang 23.1.5, CMake 4.5.0, Meson 1.12.1, Ninja 1.13.2, Make 4.4.1.]
 ]
 
 #slide[Then try an application we did not write][
@@ -440,19 +501,37 @@
   #text(17pt, fill: muted)[One successful application is a case study, not proof of general KDE compatibility.]
 ]
 
+#slide[GNOME VTE exercised a different build path][
+  #cols([
+    #label[The upstream GTK 4 demo]
+    - Uses the installed VTE widget library.
+    - Keeps its GtkBuilder forms, menus and CSS.
+    - Builds and launches from the easypp layout.
+  ], [
+    #label[What easypp learned to do]
+    - Run `glib-compile-resources` from the manifest.
+    - Track the assets and link their registration code.
+    - Prefer GTK 4 VTE metadata for the shared header.
+  ])
+  #v(0.45em)
+  #note[#text(17pt)[Verified the clean build, desktop launch, and CMake export.]]
+  #source[examples/vte. VTE 0.84.1, upstream revision f2223e45. Capability demonstration.]
+]
+
 #slide[The boundary is deliberate][
   #cols([
     #label[Current scope]
     - Linux and Clang
-    - Installed system dependencies
+    - System and Conan packages
     - Fixed flags and folder layout
     - Static project libraries
-    - Qt 6 and KConfig code generation
+    - Qt, KDE and GLib generation
+    - C++ modules and header units
   ], [
     #label[Outside that scope]
-    - Package downloading
     - Per-target build policy
-    - Shared project libraries / C++ modules
+    - Shared project libraries
+    - External named modules
     - Installation and packaging
     - Arbitrary CMake expressions
   ])
@@ -485,12 +564,12 @@
 #slide[What this evidence supports][
   - Folder conventions can remove project build-file maintenance for this scope.
   - Strict defaults give earlier feedback on common beginner mistakes.
-  - Shared framework support can carry an existing KDE game through build and launch.
+  - KDE and GNOME demos, Conan packages and modules show how the workflow extends.
   #v(0.6em)
   #text(21pt, weight: "bold", fill: blue)[Learning outcomes still need a classroom study.]
   #v(0.4em)
-  #text(18pt)[The controlled benchmark uses one author-written game. KMines adds an existing application,
-  with source adaptation and a narrower scope than its upstream build.]
+  #text(18pt)[Blockfall is the controlled comparison. The other examples check particular behaviours
+  and do not provide comparative timings.]
 ]
 
 #page(footer: none)[

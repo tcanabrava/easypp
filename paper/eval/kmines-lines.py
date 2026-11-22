@@ -6,6 +6,7 @@ Reproduce without modifying examples/kmines:
   git -C /tmp/kmines-count fetch --depth 1 https://invent.kde.org/games/kmines.git dbb447ca171469a55a5efbadbcbb480331dc7a38
   python3 paper/eval/kmines-lines.py /tmp/kmines-count
 """
+from pathlib import Path
 import subprocess
 import sys
 
@@ -32,35 +33,29 @@ print(f'difference (easypp - upstream)\t{-physical}\t{-effective}')
 print('# Excludes presets/CI/packaging; upstream CMake also covers installation, translations, documentation.')
 print('# This is a build/launch adaptation, not installation feature parity.')
 
-# Snapshot the implementation cost separately from the project build-file count.
-# Preserve the pre-existing debugger changes when reconstructing main.rs's baseline.
-import difflib
-from pathlib import Path
+# The implementation cost belongs to the original KDE change. Pin both ends
+# so subsequent work on easypp cannot change the historical line counts.
 root = Path(__file__).resolve().parents[2]
 baseline = 'ee23bcbee7dfd37b2a46917599ac1d07abe29feb'
+revision = '9a09005'
 print('\n# Tool diff: physical added/deleted lines, including comments, blanks and unit tests.')
 print('# Baseline:', baseline)
-print('# main.rs excludes the pre-existing debugger preference/documentation changes.')
+print('# Revision:', revision)
 print('file\tadded\tdeleted\tnet')
+stats = {}
+for line in subprocess.check_output(
+    ['git', 'diff', '--numstat', '--no-renames', baseline, revision, '--', 'src', 'tests/cli.rs'],
+    cwd=root, text=True,
+).splitlines():
+    additions, deletions, path = line.split('\t')
+    stats[path] = (int(additions), int(deletions))
 added = deleted = 0
 for name in ['builder', 'export', 'main', 'project', 'qt', 'system', 'kde']:
     path = f'src/{name}.rs'
-    after = (root / path).read_text()
-    if name == 'kde':
-        before = ''
-    elif name == 'main':
-        before = after.replace('mod kde;\n', '')
-        start = before.index('/// data/ mirrors')
-        end = before.index('fn run_bin(', start)
-        before = before[:start] + before[end:]
-        before = before.replace('    runtime_data(&mut command, project);\n', '')
-        before = before.replace('    let mut command = Command::new(&exe);\n    let status = command\n', '    let status = Command::new(&exe)\n')
-    else:
-        before = subprocess.check_output(['git', 'show', f'{baseline}:{path}'], cwd=root, text=True)
-    diff = list(difflib.unified_diff(before.splitlines(), after.splitlines(), n=0))
-    a = sum(line.startswith('+') and not line.startswith('+++') for line in diff)
-    d = sum(line.startswith('-') and not line.startswith('---') for line in diff)
+    a, d = stats[path]
     print(f'{path}\t{a}\t{d}\t{a-d}')
     added += a
     deleted += d
 print(f'TOTAL TOOL\t{added}\t{deleted}\t{added-deleted}')
+a, d = stats['tests/cli.rs']
+print(f'Integration test\t{a}\t{d}\t{a-d}')

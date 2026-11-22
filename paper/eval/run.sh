@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproduces every measurement in the paper. Usage: paper/eval/run.sh [easypp-binary]
+# Reproduces the Blockfall comparison in the paper. Usage: paper/eval/run.sh [easypp-binary]
 # Works in a fresh temporary folder; prints results as tab-separated lines.
 set -uo pipefail
 

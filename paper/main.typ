@@ -1,6 +1,6 @@
 // Folders, Not Build Files: a zero-configuration C++ build tool for teaching — draft
 // Build: typst compile main.typ
-// Data: every number in Section 5 comes from eval/run.sh (output in eval/results.txt).
+// Blockfall data: eval/results.txt. KMines line counts: eval/kmines-lines.txt.
 
 #set document(
   title: "Folders, Not Build Files: A Zero-Configuration C++ Build Tool for Teaching",
@@ -33,24 +33,20 @@
 #v(1em)
 
 #block(inset: (x: 1.5em))[
-  *Abstract.* A student who wants to split a C++ program into a library and an
-  executable must first learn a build system. In Rust and Go that step does not
-  exist: the tool that ships with the language finds the code by convention. We
-  present #easypp, a small build tool for C and C++ that does the same. There is no
-  build file: folders under `src/libs` are static libraries, files under `src/bin`
-  are executables, files under `src/tests` are tests. Which libraries each program needs is worked
-  out from its `#include` lines, including system libraries found through
-  pkg-config. The defaults are fixed and strict: clang, C++23,
-  `-Wall -pedantic -Werror`, and AddressSanitizer with UBSan in debug builds.
-  Compiler and linker errors come with plain-language explanations, and a
-  `CMakeLists.txt` can be exported for the move to industry tools. We compare it
-  with CMake, Meson and a hand-written Makefile on a 12-target SDL2 game. The
-  other three need 25 to 38 lines of build code to describe the same project. When a new library is added without editing
-  that code, all three fail with a linker error and #easypp builds. With minimal
-  set-up, CMake and Make silently compile a program that reads an uninitialised
-  variable, using GNU C++17. #easypp rejects it. We argue that these defaults let a course teach
-  libraries, headers and linking before it teaches a build language, and we are
-  explicit about what the tool does not do.
+  *Abstract.* Building a multi-file C++ program usually asks a beginner to
+  describe the same dependency in source code and in a build language. We present
+  #easypp, a Linux build tool that discovers targets from folders and dependencies
+  from includes and imports. It uses Clang, C++23, strict warnings, and debug
+  sanitizers by default. Projects can record package versions in a Conan
+  manifest. Target definitions still come from the source tree.
+
+  In a controlled comparison on a 12-target SDL2 game, CMake, Meson and Make
+  require 25–38 lines of build code to match #easypp's configuration. Extracting
+  a library without editing the build description produces a link error in all
+  three baselines. #easypp builds and runs the tests. Separate examples exercise
+  upstream KDE and GNOME applications, Conan package selection, and C++ modules.
+  The results describe configuration burden and compiler feedback. A classroom
+  study would be needed to assess effects on learning.
 ]
 
 = Introduction <sec-intro>
@@ -74,10 +70,10 @@ multi-file program needs no build knowledge at all.
 
 This paper asks how far the same idea goes in C++. Our contributions are:
 
-+ #easypp, a build tool of about 6,000 lines of Rust that uses Clap for
-  command-line parsing and an embedded database for the build cache. It derives the
-  whole build from a fixed folder layout and from the `#include` lines in the
-  sources, including system libraries, OpenMP, Boost and Qt 6 code generation
++ #easypp, a build tool of about 7,600 lines of Rust, including tests in
+  the implementation modules. It derives targets and dependencies from folders,
+  includes and imports, and provides defaults for compilation, tests and
+  framework code generation
   (@sec-design).
 + A comparison of the main C++ build and project tools along the axes that matter
   to a beginner (@sec-landscape).
@@ -85,6 +81,8 @@ This paper asks how far the same idea goes in C++. Our contributions are:
   size, the cost of a typical change, the behaviour of each tool's defaults, and
   build time (@sec-eval). All scripts and build files are published with the
   tool.
++ Capability demonstrations using upstream applications, profile-specific Conan
+  dependencies and C++ modules (@sec-kmines, @sec-capabilities).
 + An argument, with its limits, for why this simplifies teaching (@sec-teaching,
   @sec-limits).
 
@@ -129,7 +127,8 @@ machine. Many of its students do not yet know what a linker is.
 
 == One fixed layout
 
-#easypp has no configuration file. A project is any folder whose `src/` contains
+#easypp needs no file that declares build targets. An optional `conanfile.txt`
+records external package requirements. A project is any folder whose `src/` contains
 at least one of these sub-folders:
 
 ```text
@@ -195,10 +194,9 @@ is then mapped to a library by three rules, tried in order:
 + A pkg-config package @pkg-config named like the header: `<SDL2/SDL.h>` maps to
   `sdl2`, `<curl/curl.h>` to `libcurl`, `<zlib.h>` to `zlib`.
 + A package whose private include folder contains the header. For example, `<SDL.h>`
-  lives in `/usr/include/SDL2`. When several versions match, such as gtk2, gtk3
-  and gtk4 for `<gtk/gtk.h>`, the latest always wins: the version is read from
-  the folder's name (`gtk-4.0`), not from package names, where `gdk-x11-3.0` would
-  read as version 11. There is no override, by design.
+  lives in `/usr/include/SDL2`. When several system packages match, #easypp ranks include directory
+  specificity and version. It reads the version from the directory name
+  (for example, `gtk-4.0`) rather than interpreting digits in a package name.
 + A `lib<name>.so` or `.a` with the header's name in the library folders, trying
   `lib<prefix>_<module>` first for `<prefix/module...>`. This covers Boost's
   compiled libraries, which ship no pkg-config files (`<boost/json.hpp>` links
@@ -233,6 +231,58 @@ A `.kcfgc` file selects a KConfig schema through `File=`; the tool runs
 For runtime assets, `data/<application>/` mirrors a shared-data installation;
 `run` and `debug` prepend `data/` to `XDG_DATA_DIRS`.
 
+*GLib resources.* When a component contains a `.gresource.xml` manifest,
+#easypp runs `glib-compile-resources` to produce C source. Listed assets are
+tracked as inputs. The resource object is linked directly into programs so
+its startup registration runs, including when the manifest belongs to an
+internal static library. GtkBuilder forms remain resource inputs.
+
+== Package acquisition with Conan <sec-conan>
+
+An include identifies an API. It cannot express which package version an
+assignment requires. Projects that need reproducible direct requirements can
+record those versions in `conanfile.txt`. The manifest declares packages and
+options. The source tree still determines which targets use them.
+
+`easypp deps add zlib/1.3.1` records a package after a successful install.
+On a fresh checkout, `build`, `run`, `test` and `debug` install missing or
+stale dependency metadata for the selected build profile and can build
+missing package binaries. #easypp uses Conan 2 on PATH or installs it in a
+user-local environment through pipx or uv. It uses the default Conan
+profile when available and detects a project-local Clang profile otherwise.
+Network access and package build tools may be required on the first run.
+
+Conan's `PkgConfigDeps` generator supplies package and component metadata
+@conan-pkgconfig. #easypp reads the resulting `.pc` files from
+`build/conan/debug/` or `build/conan/release/`. When a selected Conan package
+owns a header, it takes precedence over the system copy. The `info`
+command reports that choice. A Conan lockfile can additionally pin the
+resolved recipe graph.
+
+== Scheduling C++ modules <sec-modules>
+
+A named import adds both a compile dependency and, when its provider belongs
+to a different library, a link dependency. For example, a program importing
+`report` links its owning library and the library that supplies `arithmetic`,
+which `report` imports. #easypp compiles providers before their importers.
+Clang produces the object and compiled module interface in one invocation
+@clang-modules. Each subsequent wave can compile independent sources in parallel.
+
+Source declarations identify module projects. When `clang-scan-deps` is
+available, its P1689 output refines named imports using active preprocessor
+branches and can find imports in included headers. A source-text pass remains
+the fallback for translation units the scanner cannot process before code
+generation. Edits to a compiled interface invalidate its users. Changing
+the Clang executable invalidates cached interfaces and header units.
+
+Quoted and angle-bracket header imports create Clang PCMs without separate
+objects. Imports written inside header units are outside the current
+discovery scope. With compatible toolchain sources and a module manifest,
+`import std;` and `import std.compat;` build the required interfaces on
+demand. The CMake exporter uses module file sets for project-local modules.
+Exporting standard-library modules requires CMake 4.5 or newer and Ninja.
+The exporter rejects header units @cmake-modules.
+
 == A per-project cache <sec-cache>
 
 Discovery has a fixed cost that does not depend on the project. On the evaluation
@@ -242,18 +292,17 @@ the pkg-config index takes about 20 ms. #easypp therefore keeps a cache in
 system description, which library each system header maps to, each package's
 flags, and the `#include` list of every project file. The system part is checked
 against a fingerprint: the modification times of clang, clang++ and pkg-config and
-of every include, library and pkg-config folder, plus `PKG_CONFIG_PATH`. Installing
+of include, library and pkg-config folders, plus the pkg-config search path
+and the selected Conan profile's generated `.pc` timestamps. Installing
 or removing a package changes at least one of these, and then the system is
 detected again. Include lists are reused while a file's modification time and size
 are unchanged. Everything is read in one pass at start-up, and only changes are
 written back, in one transaction.
 
-The trade-off is deliberate. The first build of a project is about 0.2 s slower,
-because it writes the cache. Every later run skips detection: a no-op rebuild of
-the evaluation project drops from about 100 ms to about 10–17 ms. The cache can
-never break a build. If it cannot be opened, for example because another #easypp
-is running in the same project, the tool warns and works without it.
-`easypp clean` deletes it with the rest of `build/`.
+The first build pays to populate the cache. Later builds reuse the cached
+metadata while its fingerprint remains current. If the cache cannot be
+opened, #easypp reports the problem and continues by rediscovering the
+project. `easypp clean` deletes the cache with the rest of `build/`.
 
 == Fixed, strict defaults
 
@@ -323,8 +372,9 @@ For CMake, Meson and Make we wrote the shortest idiomatic build description we
 could that reproduces #easypp's behaviour. That means the same flags, C++23,
 sanitizers in debug builds, tests registered with the tool's test runner, and
 SDL2 through pkg-config. The CMake version uses modern target-based commands. All
-files are in `eval/`. `eval/run.sh` reruns every measurement from a fresh copy;
-its output is `eval/results.txt`. The versions were clang 23.1.5, CMake 4.5.0 (Ninja
+files are in `eval/`. `eval/run.sh` reruns the Blockfall measurements from fresh
+source copies. The archived output in `eval/results.txt` comes from 20 November
+2026 and predates Conan and module support. The versions were Clang 23.1.5, CMake 4.5.0 (Ninja
 generator), Meson 1.12.1, Ninja 1.13.2 and GNU Make 4.4.1, on a 16-thread Linux machine.
 
 == Build code a student must write <sec-size>
@@ -439,10 +489,10 @@ student's behalf, has to know to ask.
 
 All four tools are fast enough for a project of this size; with sanitizers on,
 every clean build takes 1.3–2.3 s. #easypp is slower than CMake and Make on the
-first build, because that build also fills its cache (@sec-cache). Its no-op
-rebuild is on par with CMake's and Make's. Without the cache (`--no-cache`), the
-no-op rebuild takes about 0.10 s: the cost of asking clang for its search paths
-and parsing about 1,900 pkg-config files on every run.
+first build and also fills its discovery cache in that run (@sec-cache).
+Its no-op rebuild is close to CMake and Make in this measurement. These
+timings cover the Blockfall workflow. First-time package acquisition and
+module compilation are separate workloads.
 
 == An existing KDE application: KMines <sec-kmines>
 
@@ -494,6 +544,35 @@ above are part of the adaptation cost. The installed metadata reader supports
 literal properties, not arbitrary CMake code or generator expressions. One
 application demonstrates this path; it does not establish compatibility with
 KDE software in general.
+
+== Further capability checks <sec-capabilities>
+
+These examples check specific behaviours alongside the controlled Blockfall
+comparison. They have different inputs and success criteria.
+
+#figure(
+  table(
+    columns: (1fr, 1.35fr, 2fr),
+    align: left,
+    table.header[*Example*][*What was exercised*][*Observed result*],
+    [GNOME VTE GTK 4 demo], [Upstream demo and GLib resource generation],
+    [Clean build, desktop launch and CMake export succeeded. The demo links an installed VTE widget library.],
+    [Compressed JSON], [Pinned zlib, nlohmann/json and GoogleTest via Conan],
+    [Build and tests passed. Clang depfiles and linker tracing showed that the selected headers and archives came from Conan even with system copies installed.],
+    [C++ named modules and header units], [Partitions, imports between libraries, and reuse of compiled headers],
+    [Build and incremental regression tests passed. An interface edit rebuilt importers, and a compiler change invalidated cached module interfaces.],
+    [Standard library modules], [`import std` and `import std.compat` on Clang 23.1.5 and libstdc++ 16],
+    [The demo printed 42 and the test passed. CMake export also built and passed its test with CMake 4.5 and Ninja.],
+  ),
+  caption: [Capability demonstrations. These checks did not measure cross-tool build performance or learning outcomes.],
+) <tab-capabilities>
+
+The VTE demo is from revision `f2223e45d7f04c5383c59e76772501f0ed4215bc`.
+It exposed two needs shared by GTK applications: generating resources and
+selecting the GTK 4 library when both generations provide the same header.
+The adaptation builds the demo with the installed widget library and retains
+its original UI resources. The example records its source changes and
+toolchain requirements in `examples/vte/README.md`.
 
 = Implications for teaching <sec-teaching>
 
@@ -552,30 +631,23 @@ they wrote themselves.
 
 = Limitations and threats to validity <sec-limits>
 
-*Scope of the tool.* #easypp only targets Linux and clang. That is the most
-serious limitation for teaching, since many students use Windows. Code::Blocks, for instance, is
-distributed for Windows with a bundled MinGW compiler @codeblocks. It does not download packages:
-system libraries must be installed, and third-party code must be copied into
-`src/thirdparty`. It has no per-target flags, code generation other than Qt's
-(moc, uic, rcc) and KDE KConfig, install step or shared libraries. Project-local C++
-modules and header units are supported through explicit imports. For
-named-module projects, Clang dependency scanning can also discover imports in
-included headers.
-Easypp can build standard-library modules when the installed toolchain ships
-their source manifest. Named modules from external packages are outside this
-scope. CMake export supports project-local named modules and standard-library
-modules with a compatible CMake version.
-These are not
-oversights: each one would add a configuration surface. But they put a clear limit
-on where the tool can be used.
+*Scope of the tool.* #easypp targets Linux and Clang. This constrains
+classroom deployment where students use Windows, including programs that
+currently rely on Code::Blocks with a bundled compiler @codeblocks. System
+dependencies outside Conan still need to be installed separately. Conan adds
+a recoverable package setup path, with a first-run cost and a dependency on
+package and recipe availability. The fixed layout omits per-target flags,
+shared project libraries and installation rules. Module support covers
+project-local imports and standard library manifests supplied by the
+toolchain. External named modules require additional integration.
 
-*Heuristics.* Mapping a system header to a library is a guess. When several
-versions are installed, the latest always wins, and there is deliberately no
-way to ask for an older one. A header named like an unrelated library adds a
-useless (though harmless, thanks to `--as-needed`) link flag. The include scan
-evaluates only conditions it can decide and cannot follow macro includes. The cache's fingerprint uses folder modification
-times, so a header added inside an existing sub-folder, without any library
-folder changing, is not noticed until the next `easypp clean`.
+*Heuristics.* Include discovery cannot follow macro includes and skips only
+preprocessor branches that it can prove inactive. Dependency scanning gives
+named-module projects a compiler view of imports when available. Installed
+package variants can expose the same headers, so automated ownership
+resolution can be ambiguous. `easypp info` shows which packages were chosen.
+The discovery cache uses metadata timestamps. Adding headers inside an
+existing include subtree can require a clean rebuild to refresh discovery.
 
 *Measurements.* The controlled comparison uses Blockfall; KMines is an additional
 build-and-launch case study, with source adaptation and a narrower scope than
@@ -595,23 +667,21 @@ study is future work.
 
 = Conclusion <sec-conclusion>
 
-In C++, every small project currently records its structure twice, once in the
-code and once in a build language. #easypp shows that for the projects students
-write, the second copy can be derived from the first: a fixed folder layout plus
-the `#include` lines say everything needed to build, link and test. On a 12-target
-game, the tool replaces 25–38 lines of build code with none. It turns a link error
-into a successful build when a library is added. It rejects two classic beginner
-bugs that the minimal set-ups of CMake and Make let through, catches memory errors
-at run time, explains the errors students meet most, and does so in comparable
-build time. When students are ready for CMake, it writes their first
-`CMakeLists.txt`. The other tools remain the right choice for projects that
-outgrow a fixed layout. For the first contact with multi-file C++, sane defaults
-and no build file let a course spend its time on C++.
+For a small C++ project, a directory can identify a target and an include
+or import can identify a dependency. In Blockfall, these conventions replace
+25–38 lines of build code and let the library extraction pass without editing
+a second description. Strict defaults reject both beginner mistakes in the
+minimal compiler exercise. The framework, Conan and module examples show how
+the same workflow can extend to later assignments.
+
+The educational hypothesis is that students can learn translation units,
+libraries and linking before learning build-language syntax. CMake export
+gives them a way to inspect the corresponding targets in a project they
+already know. Testing that teaching sequence with students is the next step.
 
 #v(1em)
-*Availability.* #easypp, its end-to-end tests, the examples (Blockfall with SDL2,
-Life with GTK 4 and OpenMP, a Boost.Asio server, a Qt 6 application, and the adapted KDE KMines), the build
-files for the other tools and the evaluation script are in the same repository
-as this paper (`src/`, `tests/`, `examples/`, `paper/eval/`).
+*Availability.* Implementation, tests, examples and evaluation artifacts are
+in `src/`, `tests/`, `examples/` and `paper/eval/`. The presentation is in
+`slides/main.typ`.
 
 #bibliography("refs.yml", style: "ieee")
