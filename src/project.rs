@@ -156,7 +156,18 @@ pub fn find_root(start: &Path) -> Result<PathBuf, String> {
 pub fn discover(
     root: &Path,
     opts: &crate::builder::Options,
+    cache: Option<&mut Cache>,
+) -> Result<Project, String> {
+    discover_with_header_checks(root, opts, cache, None)
+}
+
+type HeaderCheck<'a> = &'a dyn Fn(&System, &str);
+
+pub fn discover_with_header_checks(
+    root: &Path,
+    opts: &crate::builder::Options,
     mut cache: Option<&mut Cache>,
+    check_header: Option<HeaderCheck<'_>>,
 ) -> Result<Project, String> {
     // Libraries.
     let mut libs = BTreeMap::new();
@@ -314,6 +325,11 @@ pub fn discover(
             walk(&lib.dir)
         };
         let scan = resolver.scan(files.clone(), Some(&lib.name), &modules);
+        if let Some(check) = check_header {
+            for header in &scan.external {
+                check(&system, header);
+            }
+        }
         lib.deps = scan.libs;
         lib.deps
             .extend(modules.libraries(&lib.sources, Some(&lib.name))?);
@@ -357,6 +373,7 @@ pub fn discover(
         libs: &libs,
         lib_order: &lib_order,
         modules: &modules,
+        check_header,
     };
     let bins = discover_targets(Path::new(BIN_DIR), Kind::Bin, &ctx)?;
     let tests = discover_targets(Path::new(TESTS_DIR), Kind::Test, &ctx)?;
@@ -443,6 +460,7 @@ struct Context<'a> {
     libs: &'a BTreeMap<String, Library>,
     lib_order: &'a [String],
     modules: &'a crate::modules::Modules,
+    check_header: Option<HeaderCheck<'a>>,
 }
 
 fn resource_dep(files: &QtFiles, system: &System) -> Result<Option<SysDep>, String> {
@@ -505,6 +523,11 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
         }
 
         let scan = ctx.resolver.scan(files.clone(), None, ctx.modules);
+        if let Some(check) = ctx.check_header {
+            for header in &scan.external {
+                check(ctx.system, header);
+            }
+        }
         let mut dependencies = scan.libs;
         dependencies.extend(ctx.modules.libraries(&sources, None)?);
         let libs = link_order(&dependencies, ctx.libs, ctx.lib_order);

@@ -27,11 +27,18 @@ easypp lint                # check for common bugs with clang-tidy
 easypp export-cmake       # write a CMakeLists.txt that builds the same way
 easypp build --release    # -O2 -DNDEBUG instead of -O0 -g
 easypp info               # what was discovered, and what links to what
+easypp doctor             # check the toolchain and project dependencies
 easypp clean
 ```
 
 Run `easypp --help` to list commands. Use `easypp help run` for a command's
 options or `easypp help deps add` for a nested command.
+
+`easypp doctor` works before you create a project. Inside a project it also
+checks the tools and libraries it can infer from the sources, including Qt,
+OpenMP, CUDA, and Conan setup. It reports required fixes without creating
+project build files or installing packages. Use `--release` to check the
+Release profile.
 
 ## How it works
 

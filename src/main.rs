@@ -4,6 +4,7 @@ mod cli;
 mod conan;
 mod cond;
 mod cuda;
+mod doctor;
 mod export;
 mod hints;
 mod kde;
@@ -73,6 +74,13 @@ fn run() -> Result<ExitCode, String> {
 
     // Everything below works from the project root, with paths relative to it.
     let invoked_from = std::env::current_dir().map_err(|e| e.to_string())?;
+    if matches!(action, Actions::Doctor) {
+        return Ok(if doctor::run(&invoked_from, &opts)? {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
     let root = project::find_root(&invoked_from)?;
     std::env::set_current_dir(&root).map_err(|e| e.to_string())?;
 

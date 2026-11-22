@@ -141,6 +141,48 @@ fn have(tool: &str) -> bool {
 }
 
 #[test]
+fn doctor_checks_the_toolchain_inside_and_outside_projects() {
+    let standalone = Project::temporary("doctor-standalone");
+    fs::create_dir(&standalone.dir).unwrap();
+    assert!(standalone.ok(&["doctor"]).contains("local toolchain"));
+    assert!(!standalone.exists("build"));
+
+    let project = Project::new("doctor");
+    let report = project.ok(&["doctor"]);
+    assert!(
+        report.contains("C++23 standard library and linker"),
+        "{report}"
+    );
+    assert!(report.contains("1 executable(s)"), "{report}");
+    assert!(!project.exists("build") && !project.exists("compile_commands.json"));
+}
+
+#[test]
+fn doctor_reports_missing_cuda_and_conan_without_installing_or_building() {
+    let project = Project::new("doctor-missing");
+    project.write("src/bin/kernel.cu", "int main() { return 0; }\n");
+    project.write("conanfile.txt", "[requires]\nzlib/1.3.1\n");
+    let tools = project.dir.join("empty-path");
+    fs::create_dir(&tools).unwrap();
+    let out = Command::new(easypp())
+        .arg("doctor")
+        .current_dir(&project.dir)
+        .env("PATH", tools)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let report = text(&out);
+    for diagnostic in [
+        "Cannot run clang",
+        "Conan 2 is missing",
+        "CUDA sources require nvcc",
+    ] {
+        assert!(report.contains(diagnostic), "{report}");
+    }
+    assert!(!project.exists("build") && !project.exists("compile_commands.json"));
+}
+
+#[test]
 fn help_exposes_nested_commands_and_command_specific_options() {
     let p = Project::new("help");
     assert!(p.ok(&[]).contains("easypp help deps add"));

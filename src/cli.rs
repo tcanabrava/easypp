@@ -86,6 +86,8 @@ pub enum Actions {
     },
     /// Show discovered targets, dependencies, and code generators.
     Info,
+    /// Check the local toolchain and this project's build dependencies.
+    Doctor,
     /// Change the CUDA architecture saved for this project.
     #[command(after_help = "Example: easypp cuda-arch sm_86")]
     CudaArch {
