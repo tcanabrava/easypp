@@ -10,6 +10,12 @@ use std::fmt::Write;
 use std::path::Path;
 
 pub fn write(project: &Project, force: bool) -> Result<(), String> {
+    if project.modules.has_header_units() {
+        return Err(
+            "CMake export does not support C++ header units. Build this project with easypp."
+                .into(),
+        );
+    }
     let path = project.root.join("CMakeLists.txt");
     if path.exists() && !force {
         return Err("CMakeLists.txt already exists; use --force to replace it".into());

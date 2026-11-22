@@ -8,6 +8,13 @@ use std::path::{Path, PathBuf};
 struct Unit {
     provides: Option<String>,
     imports: BTreeSet<String>,
+    headers: BTreeSet<HeaderUnit>,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HeaderUnit {
+    pub name: String,
+    pub quoted: bool,
 }
 
 #[derive(Default, Debug)]
@@ -47,7 +54,7 @@ impl Modules {
                     path.display()
                 ));
             }
-            if unit.provides.is_some() || !unit.imports.is_empty() {
+            if unit.provides.is_some() || !unit.imports.is_empty() || !unit.headers.is_empty() {
                 graph.units.insert(path, unit);
             }
         }
@@ -74,6 +81,17 @@ impl Modules {
 
     pub fn plan(&self, src: &Path) -> Option<&Plan> {
         self.plans.get(src)
+    }
+
+    pub fn headers(&self, src: &Path) -> impl Iterator<Item = &HeaderUnit> {
+        self.units
+            .get(src)
+            .into_iter()
+            .flat_map(|unit| &unit.headers)
+    }
+
+    pub fn has_header_units(&self) -> bool {
+        self.units.values().any(|unit| !unit.headers.is_empty())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -198,8 +216,22 @@ fn parse(text: &str) -> Result<Unit, String> {
                 unit.imports.insert(name);
             }
         } else if let Some(operand) = keyword(statement, "import") {
-            if operand.starts_with(['<', '"']) {
-                return Err("header-unit imports are not supported; use #include".into());
+            if let Some((name, quoted)) = operand
+                .strip_prefix('<')
+                .and_then(|text| text.split_once('>'))
+                .map(|(name, _)| (name, false))
+                .or_else(|| {
+                    operand
+                        .strip_prefix('"')
+                        .and_then(|text| text.split_once('"'))
+                        .map(|(name, _)| (name, true))
+                })
+            {
+                unit.headers.insert(HeaderUnit {
+                    name: name.to_owned(),
+                    quoted,
+                });
+                continue;
             }
             let name = if let Some(partition) = operand.strip_prefix(':') {
                 primary
@@ -250,8 +282,7 @@ fn in_number(prefix: &str) -> bool {
         .is_some_and(|c| c.is_ascii_digit())
 }
 
-/// Preserve newlines and replace literals with an opaque token (a quote for
-/// strings, so a header-unit import remains distinguishable).
+/// Preserve newlines and quoted import operands while masking other literals.
 fn mask_comments_and_literals(mut text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     while !text.is_empty() {
@@ -285,14 +316,16 @@ fn mask_comments_and_literals(mut text: &str) -> String {
             text = &text[ch.len_utf8()..];
             continue;
         };
-        output.push(if comment {
-            ' '
-        } else if text.starts_with('"') {
-            '"'
+        let follows_import = output
+            .trim_end()
+            .strip_suffix("import")
+            .is_some_and(|before| !before.ends_with(|c: char| c.is_alphanumeric() || c == '_'));
+        if text.starts_with('"') && follows_import {
+            output.push_str(&text[..end]);
         } else {
-            '@'
-        });
-        output.extend(text[..end].chars().filter(|&c| c == '\n'));
+            output.push(if comment { ' ' } else { '@' });
+            output.extend(text[..end].chars().filter(|&c| c == '\n'));
+        }
         text = &text[end..];
     }
     output

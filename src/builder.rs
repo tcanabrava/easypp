@@ -12,6 +12,7 @@ use crate::qt::{self, QtFiles};
 use crate::ui;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -375,6 +376,12 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
     for c in components {
         for src in c.sources.iter().chain(&c.resources) {
             expected.insert(object_path(opts, src));
+            expected.extend(
+                project
+                    .modules
+                    .headers(src)
+                    .map(|header| header_unit(project, opts, src, &c.cflags, header).0),
+            );
             if project.modules.provides(src) {
                 expected.insert(bmi_path(opts, src));
             }
@@ -466,6 +473,75 @@ fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result
     )
 }
 
+fn header_unit(
+    project: &Project,
+    opts: &Options,
+    src: &Path,
+    flags: &[String],
+    header: &crate::modules::HeaderUnit,
+) -> (PathBuf, Vec<String>) {
+    let mut cmd = compile_flags(project, opts, src, flags);
+    let language = if header.quoted {
+        let parent = src.parent().unwrap();
+        if parent.join(&header.name).is_file() {
+            cmd.extend(["-iquote".into(), path_str(parent)]);
+        }
+        "c++-user-header"
+    } else {
+        "c++-system-header"
+    };
+    cmd.extend(["-x".into(), language.into(), "--precompile".into()]);
+
+    // Clang identifies header units by their underlying header. Importers
+    // with the same compiler context must refer to the same PCM.
+    let mut hash = DefaultHasher::new();
+    (&cmd, &header.name).hash(&mut hash);
+    let output = opts
+        .dir()
+        .join("obj/header-units")
+        .join(format!("{:016x}.pcm", hash.finish()));
+    let depfile = depfile_path(&output);
+    cmd.extend([
+        "-MD".into(),
+        "-MF".into(),
+        path_str(&depfile),
+        "-MT".into(),
+        path_str(&output),
+        "-o".into(),
+        path_str(&output),
+        "--".into(),
+        header.name.clone(),
+    ]);
+    (output, cmd)
+}
+
+fn compile_header_units<'a>(
+    project: &Project,
+    opts: &Options,
+    units: impl Iterator<Item = (&'a Path, &'a [String])>,
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    let mut jobs = Vec::new();
+    for (src, flags) in units {
+        for header in project.modules.headers(src) {
+            let (output, cmd) = header_unit(project, opts, src, flags, header);
+            if seen.insert(output.clone())
+                && !depfile_inputs(&depfile_path(&output))
+                    .is_some_and(|inputs| up_to_date(&output, &cmd, &inputs))
+            {
+                jobs.push(Job {
+                    verb: "Precompiling",
+                    label: format!("header unit {} for {}", header.name, src.display()),
+                    output,
+                    cmd,
+                    compiler: true,
+                });
+            }
+        }
+    }
+    run_jobs(jobs, opts, project)
+}
+
 fn compile_units<'a>(
     project: &Project,
     opts: &Options,
@@ -479,31 +555,35 @@ fn compile_units<'a>(
         waves.entry(depth).or_default().push((src, cflags));
     }
     for units in waves.into_values() {
-        let jobs = units
-            .into_iter()
-            .filter_map(|(src, cflags)| {
-                let obj = object_path(opts, src);
-                let cmd = compile_command(project, opts, src, &obj, cflags);
-                let fresh = (!project.modules.provides(src) || bmi_path(opts, src).is_file())
-                    && depfile_inputs(&depfile_path(&obj)).is_some_and(|mut inputs| {
-                        if let Some(plan) = project.modules.plan(src) {
-                            inputs.extend(
-                                plan.imports
-                                    .iter()
-                                    .map(|name| bmi_path(opts, project.modules.provider(name))),
-                            );
-                        }
-                        up_to_date(&obj, &cmd, &inputs)
-                    });
-                (!fresh).then(|| Job {
-                    verb: "Compiling",
-                    label: src.display().to_string(),
-                    output: obj,
-                    cmd,
-                    compiler: true,
+        compile_header_units(project, opts, units.iter().copied())?;
+        let jobs =
+            units
+                .into_iter()
+                .filter_map(|(src, cflags)| {
+                    let obj = object_path(opts, src);
+                    let cmd = compile_command(project, opts, src, &obj, cflags);
+                    let fresh =
+                        (!project.modules.provides(src) || bmi_path(opts, src).is_file())
+                            && depfile_inputs(&depfile_path(&obj)).is_some_and(|mut inputs| {
+                                if let Some(plan) = project.modules.plan(src) {
+                                    inputs.extend(plan.imports.iter().map(|name| {
+                                        bmi_path(opts, project.modules.provider(name))
+                                    }));
+                                }
+                                inputs.extend(project.modules.headers(src).map(|header| {
+                                    header_unit(project, opts, src, cflags, header).0
+                                }));
+                                up_to_date(&obj, &cmd, &inputs)
+                            });
+                    (!fresh).then(|| Job {
+                        verb: "Compiling",
+                        label: src.display().to_string(),
+                        output: obj,
+                        cmd,
+                        compiler: true,
+                    })
                 })
-            })
-            .collect();
+                .collect();
         run_jobs(jobs, opts, project)?;
     }
 
@@ -521,6 +601,17 @@ pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
         .collect();
     let plans: Vec<&qt::Plan> = libs.values().chain(&targets).map(|c| &c.plan).collect();
     run_codegen(project, &plans, opts)?;
+    compile_header_units(
+        project,
+        opts,
+        libs.values().chain(&targets).flat_map(|component| {
+            component
+                .sources
+                .iter()
+                .filter(|src| !project.modules.provides(src))
+                .map(|src| (src.as_path(), component.cflags.as_slice()))
+        }),
+    )?;
     let providers = libs.values().chain(&targets).flat_map(|component| {
         component
             .sources
@@ -683,11 +774,10 @@ fn base_includes(_project: &Project) -> Vec<String> {
     vec![format!("-I{}", crate::project::LIBS_DIR)]
 }
 
-fn compile_command(
+fn compile_flags(
     project: &Project,
     opts: &Options,
     src: &Path,
-    obj: &Path,
     system_cflags: &[String],
 ) -> Vec<String> {
     let lang = Lang::of(src).expect("only sources are compiled");
@@ -719,6 +809,24 @@ fn compile_command(
         cmd.extend(["-isystem".into(), path_str(dir)]);
     }
     cmd.extend(system_cflags.iter().cloned());
+    cmd
+}
+
+fn compile_command(
+    project: &Project,
+    opts: &Options,
+    src: &Path,
+    obj: &Path,
+    cflags: &[String],
+) -> Vec<String> {
+    let mut cmd = compile_flags(project, opts, src, cflags);
+    if project.modules.headers(src).next().is_some() {
+        cmd.push("-Wno-experimental-header-units".into());
+    }
+    for header in project.modules.headers(src) {
+        let (path, _) = header_unit(project, opts, src, cflags, header);
+        cmd.push(format!("-fmodule-file={}", path.display()));
+    }
     if project.modules.provides(src) {
         cmd.extend([
             "-x".into(),

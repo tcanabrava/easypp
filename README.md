@@ -59,8 +59,14 @@ options or `easypp help deps add` for a nested command.
   compiled module interfaces before their importers, and interface changes
   invalidate dependent objects. See the [modules example](examples/modules/README.md).
   Module declarations and imports must be written directly in source files.
-  Header units, `import std`, and modules supplied by external packages are
-  outside the current support.
+  `import std` and named modules supplied by external packages are outside
+  the current support.
+- **C++ header units**: `import "header.hpp";` and `import <array>;` compile the
+  header as a Clang PCM. The same discovery rules used for includes determine
+  library dependencies. Changes to the imported header or its textual includes
+  rebuild the unit. See the [header units example](examples/header-units/README.md).
+  Imports must be written directly in C++ source files. CMake export cannot
+  export projects that use header units.
 - **System libraries** (Linux): `#include` a system header and easypp
   links the library that provides it. It checks these rules in order:
   1. A pkg-config package named like the header: `<SDL2/SDL.h>` → `sdl2`,

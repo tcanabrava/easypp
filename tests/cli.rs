@@ -561,3 +561,41 @@ fn named_modules_link_and_rebuild_importers() {
             .contains("module import cycle")
     );
 }
+
+#[test]
+fn header_units_rebuild_and_share_with_named_modules() {
+    let p = Project::new("header-units");
+    p.remove("src");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/header-units/src");
+    assert!(
+        Command::new("cp")
+            .arg("-R")
+            .arg(example)
+            .arg(&p.dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    p.write(
+        "src/libs/scale/arrays.cppm",
+        "export module arrays;\nexport import <array>;\n",
+    );
+    let source = "src/bin/demo/main.cpp";
+    let main = fs::read_to_string(p.dir.join(source)).unwrap();
+    p.write(source, &format!("import arrays;\n{main}"));
+    let header = "src/bin/demo/input.hpp";
+    p.write(header, "inline constexpr int input = 21;\n");
+    p.write("src/bin/demo/constants.hpp", "#include \"input.hpp\"\n");
+
+    let first = p.ok(&["run", "--release", "-j4"]);
+    assert_eq!(first.matches("Precompiling header unit array").count(), 1);
+    assert!(!p.ok(&["build", "--release"]).contains("Precompiling"));
+
+    p.write(header, "inline constexpr int input = 20 + 1;\n");
+    let updated = p.ok(&["run", "--release", "-j4"]);
+    assert!(updated.contains("Precompiling header unit constants.hpp"));
+    assert!(updated.contains("Compiling src/bin/demo/main.cpp"));
+    assert!(!updated.contains("Precompiling header unit array"));
+
+    assert!(p.fails(&["export-cmake"]).contains("header units"));
+}

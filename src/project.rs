@@ -239,7 +239,7 @@ pub fn discover(root: &Path, mut cache: Option<&mut Cache>) -> Result<Project, S
         } else {
             walk(&lib.dir)
         };
-        let scan = resolver.scan(files.clone(), Some(&lib.name));
+        let scan = resolver.scan(files.clone(), Some(&lib.name), &modules);
         lib.deps = scan.libs;
         lib.deps
             .extend(modules.libraries(&lib.sources, Some(&lib.name))?);
@@ -390,7 +390,7 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
             ));
         }
 
-        let scan = ctx.resolver.scan(files.clone(), None);
+        let scan = ctx.resolver.scan(files.clone(), None, ctx.modules);
         let mut dependencies = scan.libs;
         dependencies.extend(ctx.modules.libraries(&sources, None)?);
         let libs = link_order(&dependencies, ctx.libs, ctx.lib_order);
@@ -536,8 +536,11 @@ impl Resolver {
     /// Finds the header the same way the compiler will: next to the including
     /// file, then under src/libs (so `"mylib/header.hpp"`), then in
     /// src/thirdparty. Anything else is left to the system.
-    fn resolve(&self, from: &Path, include: &str) -> Option<PathBuf> {
-        let here = from.parent().map(|p| p.join(include));
+    fn resolve(&self, from: &Path, include: &str, search_here: bool) -> Option<PathBuf> {
+        let here = search_here
+            .then(|| from.parent())
+            .flatten()
+            .map(|p| p.join(include));
         let candidates = here
             .into_iter()
             .chain(std::iter::once(self.libs_root.join(include)))
@@ -592,7 +595,12 @@ impl Resolver {
     /// not found in the project (left for the system). Follows includes
     /// through non-library headers, e.g. one next to an executable, or a
     /// third-party header.
-    fn scan(&self, files: Vec<PathBuf>, own_lib: Option<&str>) -> Scan {
+    fn scan(
+        &self,
+        files: Vec<PathBuf>,
+        own_lib: Option<&str>,
+        modules: &crate::modules::Modules,
+    ) -> Scan {
         let mut found = BTreeSet::new();
         let mut external = BTreeSet::new();
         let mut visited: HashSet<PathBuf> = HashSet::new();
@@ -610,7 +618,14 @@ impl Resolver {
             let file_includes = self.index.borrow_mut().includes(&file, |text| {
                 includes(text).into_iter().map(String::from).collect()
             });
-            for include in &file_includes {
+            let headers = own
+                .get(&file)
+                .into_iter()
+                .flat_map(|source| modules.headers(source))
+                .map(|header| (&header.name, header.quoted));
+            for (include, search_here) in
+                file_includes.iter().map(|name| (name, true)).chain(headers)
+            {
                 if include == qt::MOC_MARKER {
                     if let Some(original) = own.get(&file) {
                         moc.push(original.clone());
@@ -633,7 +648,7 @@ impl Resolver {
                     }
                     continue;
                 }
-                let Some(header) = self.resolve(&file, include) else {
+                let Some(header) = self.resolve(&file, include, search_here) else {
                     if let Some(lib) = self.library_with_file(include) {
                         ui::warn(&format!(
                             "{} includes \"{include}\", which is in library '{lib}': \
