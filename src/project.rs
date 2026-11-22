@@ -108,6 +108,17 @@ pub struct Project {
 }
 
 impl Project {
+    pub fn has_cuda_sources(&self) -> bool {
+        crate::cuda::contains_sources(
+            self.libs.values().flat_map(|lib| &lib.sources).chain(
+                self.bins
+                    .iter()
+                    .chain(&self.tests)
+                    .flat_map(|target| &target.sources),
+            ),
+        )
+    }
+
     pub fn target_has_cuda_sources(&self, target: &Target) -> bool {
         crate::cuda::contains_sources(
             target

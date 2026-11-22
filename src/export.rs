@@ -131,13 +131,7 @@ fn cmake(project: &Project) -> String {
         "3.28"
     };
     let _ = writeln!(w, "cmake_minimum_required(VERSION {version})");
-    let cuda = if crate::cuda::contains_sources(
-        project
-            .libs
-            .values()
-            .flat_map(|lib| &lib.sources)
-            .chain(targets.iter().flat_map(|target| &target.sources)),
-    ) {
+    let cuda = if project.has_cuda_sources() {
         " CUDA"
     } else {
         ""

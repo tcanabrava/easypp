@@ -249,6 +249,11 @@ default architecture. The project database remembers the choice across
 profiles and `--no-cache` builds. See it with `easypp info`; CMake exports
 carry over a selected architecture. `easypp clean` removes the saved choice.
 
+Use `easypp cuda-arch sm_86` to change the saved target without cleaning.
+`easypp cuda-arch default` restores nvcc's default, and `easypp cuda-arch`
+offers the GPU-based recommendation in a terminal. The next build recompiles
+the affected CUDA sources and relinks their targets.
+
 CUDA kernels can call device functions defined in other `.cu` files in the
 target or its static libraries. easypp runs device linking before host linking
 and carries this setup into CMake exports.

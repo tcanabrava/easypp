@@ -86,6 +86,13 @@ pub enum Actions {
     },
     /// Show discovered targets, dependencies, and code generators.
     Info,
+    /// Change the CUDA architecture saved for this project.
+    #[command(after_help = "Example: easypp cuda-arch sm_86")]
+    CudaArch {
+        /// nvcc target such as sm_86, or default. Omit to choose the detected recommendation.
+        #[arg(value_name = "ARCHITECTURE")]
+        architecture: Option<String>,
+    },
     /// Format the project's code with clang-format.
     Fmt {
         /// Report formatting differences without editing files.

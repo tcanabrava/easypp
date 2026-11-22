@@ -479,6 +479,15 @@ fn cuda_builds_a_library_and_rebuilds_when_a_header_changes() {
         p.ok(&["info", "--no-cache"])
             .contains(&format!("CUDA architecture: {architecture}"))
     );
+    let invalid_architecture = p.fails(&["cuda-arch", "sm_9999"]);
+    assert!(
+        invalid_architecture.contains("unsupported CUDA architecture"),
+        "{invalid_architecture}"
+    );
+    assert!(
+        p.ok(&["info"])
+            .contains(&format!("CUDA architecture: {architecture}"))
+    );
     let noop = p.ok(&["build", "-j4"]);
     assert!(
         !noop.contains("Compiling") && !noop.contains("Device linking"),
@@ -526,6 +535,16 @@ fn cuda_builds_a_library_and_rebuilds_when_a_header_changes() {
             text(&out)
         );
     }
+    let configured = p.ok(&["cuda-arch", "default"]);
+    assert!(configured.contains("CUDA architecture default") && !configured.contains("Compiling"));
+    assert!(p.ok(&["info"]).contains("CUDA architecture: default"));
+    let rebuilt = p.ok(&["build", "-j4"]);
+    assert!(
+        rebuilt.contains("Compiling src/libs/device/device.cu"),
+        "{rebuilt}"
+    );
+    assert!(rebuilt.contains("Device linking demo"), "{rebuilt}");
+    assert!(!rebuilt.contains("Compiling src/bin/demo.cpp"), "{rebuilt}");
 }
 
 #[test]

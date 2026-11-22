@@ -90,28 +90,46 @@ impl Toolkit {
         if self.architecture.get().is_some() {
             return Ok(());
         }
-        let cache = crate::cache::Cache::open(Path::new(crate::builder::BUILD_DIR))
-            .map_err(|e| format!("cannot open the project database for CUDA configuration: {e}"))?;
+        let cache = architecture_cache()?;
         self.restore(&cache)?;
         if self.architecture.get().is_some() {
             return Ok(());
         }
 
+        let chosen = self.select_architecture(None)?;
+        save_architecture(&cache, &chosen)?;
+        let _ = self.architecture.set(chosen);
+        Ok(())
+    }
+
+    pub fn reconfigure(&self, requested: Option<&str>) -> Result<(), String> {
+        let cache = architecture_cache()?;
+        let chosen = self.select_architecture(requested)?;
+        save_architecture(&cache, &chosen)
+    }
+
+    fn select_architecture(&self, requested: Option<&str>) -> Result<String, String> {
         let supported = self.supported_architectures()?;
+        let choices: Vec<_> = supported.iter().map(|code| format!("sm_{code}")).collect();
+        if let Some(arch) = requested {
+            if arch == "default" || choices.iter().any(|choice| choice == arch) {
+                return Ok(arch.into());
+            }
+            return Err(format!(
+                "unsupported CUDA architecture '{arch}'. Choose one of {}, or default.",
+                choices.join(", ")
+            ));
+        }
         let gpu = visible_gpu();
         let recommended = gpu
             .as_ref()
             .and_then(|(_, capability)| closest_architecture(&supported, *capability));
         let default = recommended.map_or_else(|| "default".into(), |code| format!("sm_{code}"));
-        let chosen = if io::stdin().is_terminal() && io::stderr().is_terminal() {
-            prompt_architecture(&supported, gpu.as_ref(), &default)?
+        if io::stdin().is_terminal() && io::stderr().is_terminal() {
+            prompt_architecture(&choices, gpu.as_ref(), &default)
         } else {
-            default
-        };
-        cache.save_cuda_architecture(&chosen)?;
-        crate::ui::status("Configured", &format!("CUDA architecture {chosen}"));
-        let _ = self.architecture.set(chosen);
-        Ok(())
+            Ok(default)
+        }
     }
 
     fn supported_architectures(&self) -> Result<Vec<u16>, String> {
@@ -136,6 +154,17 @@ impl Toolkit {
         }
         Ok(codes)
     }
+}
+
+fn architecture_cache() -> Result<crate::cache::Cache, String> {
+    crate::cache::Cache::open(Path::new(crate::builder::BUILD_DIR))
+        .map_err(|e| format!("cannot open the project database for CUDA configuration: {e}"))
+}
+
+fn save_architecture(cache: &crate::cache::Cache, architecture: &str) -> Result<(), String> {
+    cache.save_cuda_architecture(architecture)?;
+    crate::ui::status("Configured", &format!("CUDA architecture {architecture}"));
+    Ok(())
 }
 
 fn toolkit_missing(nvcc: &Path, root: &Path, file: &str) -> String {
@@ -194,7 +223,7 @@ fn closest_architecture(supported: &[u16], capability: u16) -> Option<u16> {
 }
 
 fn prompt_architecture(
-    supported: &[u16],
+    choices: &[String],
     gpu: Option<&(String, u16)>,
     default: &str,
 ) -> Result<String, String> {
@@ -206,7 +235,6 @@ fn prompt_architecture(
         ),
         None => eprintln!("No NVIDIA GPU detected. You can select a target for another machine."),
     }
-    let choices: Vec<_> = supported.iter().map(|code| format!("sm_{code}")).collect();
     eprintln!(
         "Supported CUDA architectures: {}, default (nvcc default)",
         choices.join(", ")

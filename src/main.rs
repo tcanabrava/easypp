@@ -137,6 +137,15 @@ fn run() -> Result<ExitCode, String> {
             ExitCode::FAILURE
         }),
         Actions::Test(args) => run_tests(&project, &opts, &args),
+        Actions::CudaArch { architecture } => {
+            let cuda = project
+                .cuda
+                .as_ref()
+                .filter(|_| project.has_cuda_sources())
+                .ok_or("this project has no .cu sources to configure")?;
+            cuda.reconfigure(architecture.as_deref())?;
+            Ok(ExitCode::SUCCESS)
+        }
         Actions::Info => {
             print_info(&project);
             Ok(ExitCode::SUCCESS)
