@@ -1,9 +1,10 @@
 //! Dependencies between project-local C++ named module units.
 use crate::cond::Conditions;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 #[derive(Default, Debug)]
 struct Unit {
@@ -24,6 +25,7 @@ pub struct Modules {
     providers: BTreeMap<String, (PathBuf, Option<String>)>,
     plans: BTreeMap<PathBuf, Plan>,
     standard: BTreeMap<PathBuf, Vec<String>>,
+    header_resolutions: Mutex<HashMap<Vec<String>, PathBuf>>,
 }
 
 #[derive(Default, Debug)]
@@ -102,6 +104,34 @@ impl Modules {
             .get(src)
             .into_iter()
             .flat_map(|unit| &unit.headers)
+    }
+
+    pub fn resolve_header(&self, mut command: Vec<String>, name: &str) -> Option<PathBuf> {
+        command.extend([
+            "-M".into(),
+            "-MT".into(),
+            "header".into(),
+            "--".into(),
+            name.into(),
+        ]);
+        let mut resolutions = self.header_resolutions.lock().unwrap();
+        if let Some(path) = resolutions.get(&command) {
+            return Some(path.clone());
+        }
+        let output = Command::new(&command[0])
+            .args(&command[1..])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8(output.stdout).ok()?;
+        let path = crate::builder::depfile_paths(&text)
+            .first()?
+            .canonicalize()
+            .ok()?;
+        resolutions.insert(command, path.clone());
+        Some(path)
     }
 
     pub fn has_header_units(&self) -> bool {

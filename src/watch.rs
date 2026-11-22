@@ -44,6 +44,10 @@ fn regenerate(root: &Path, opts: &Options, first: bool) {
         Ok(project) => project,
         Err(e) => return ui::error(&e),
     };
+    // Generated files go to build/, outside src/, so this cannot retrigger us.
+    if let Err(e) = builder::generate(&project, opts) {
+        ui::error(&e);
+    }
     match builder::update_compile_commands(&project, opts) {
         Ok(Some(entries)) => ui::status(
             if first { "Wrote" } else { "Updated" },
@@ -52,10 +56,6 @@ fn regenerate(root: &Path, opts: &Options, first: bool) {
         Ok(None) if first => ui::status("Up to date", builder::COMPILE_DB),
         Ok(None) => {}
         Err(e) => ui::error(&e),
-    }
-    // Generated files go to build/, outside src/, so this cannot retrigger us.
-    if let Err(e) = builder::generate(&project, opts) {
-        ui::error(&e);
     }
 }
 

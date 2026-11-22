@@ -391,23 +391,23 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
                 .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
         );
         let output = format!("${{CMAKE_CURRENT_BINARY_DIR}}/{name}.c");
+        let depfile = format!("${{CMAKE_CURRENT_BINARY_DIR}}/{name}.d");
         let input = format!("${{CMAKE_CURRENT_SOURCE_DIR}}/{}", path(manifest));
         let directory = format!(
             "${{CMAKE_CURRENT_SOURCE_DIR}}/{}",
             path(manifest.parent().unwrap())
         );
-        let dependencies = crate::qt::resource_files(manifest)
-            .iter()
-            .map(|p| format!("\"${{CMAKE_CURRENT_SOURCE_DIR}}/{}\"", path(p)))
-            .collect::<Vec<_>>()
-            .join(" ");
         let _ = writeln!(
             w,
             "find_program(EASYPP_GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)"
         );
         let _ = writeln!(
             w,
-            "add_custom_command(OUTPUT \"{output}\" COMMAND \"${{EASYPP_GLIB_COMPILE_RESOURCES}}\" --generate-source --c-name {name} --sourcedir \"{directory}\" --target \"{output}\" \"{input}\" DEPENDS \"{input}\" {dependencies} VERBATIM)"
+            "add_custom_command(OUTPUT \"{output}\" COMMAND \"${{EASYPP_GLIB_COMPILE_RESOURCES}}\" --generate-source --c-name {name} --sourcedir \"{directory}\" --target \"{output}\" --dependency-file \"{depfile}\" \"{input}\" DEPENDS \"{input}\" DEPFILE \"{depfile}\" VERBATIM)"
+        );
+        let _ = writeln!(
+            w,
+            "set_source_files_properties(\"{output}\" PROPERTIES COMPILE_OPTIONS -Wno-overlength-strings)"
         );
         sources.push(format!("\"{output}\""));
     }

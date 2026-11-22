@@ -342,6 +342,11 @@ fn desktop_examples_build_from_source() {
             .status()
             .unwrap();
         assert!(status.success(), "copy sources for {example}");
+        if example == "qt-tasks" {
+            let form = "src/libs/window/mainwindow.ui";
+            let text = fs::read_to_string(p.dir.join(form)).unwrap();
+            p.write(form, &text.replace("<ui version", "<ui\n version"));
+        }
         p.ok(&["build", "-j", "4"]);
         assert!(p.exists(&format!("build/debug/bin/{executable}")));
         if example == "qt-tasks" {
@@ -397,14 +402,15 @@ fn glib_resources_build_and_regenerate() {
     let p = Project::new("glib-resources");
     p.remove("src/bin/hello.cpp");
     p.write("src/bin/check/app.gresource.xml",
-        "<gresources><gresource prefix=\"/demo\"><file>message.ui</file></gresource></gresources>\n");
-    p.write("src/bin/check/message.ui", "<interface/>\n");
+        "<gresources><gresource prefix=\"/demo\"><file>message &amp; data.txt</file></gresource></gresources>\n");
+    let resource = "src/bin/check/message & data.txt";
+    p.write(resource, &"a".repeat(6_000));
     p.write(
         "src/bin/check/main.c",
         r#"
 #include <gio/gio.h>
 int main(void) {
-    GBytes *bytes = g_resources_lookup_data("/demo/message.ui", 0, NULL);
+    GBytes *bytes = g_resources_lookup_data("/demo/message & data.txt", 0, NULL);
     if (!bytes) return 1;
     g_bytes_unref(bytes);
     return 0;
@@ -413,8 +419,29 @@ int main(void) {
     );
     assert!(p.ok(&["run", "check"]).contains("glib-compile-resources"));
     assert!(!p.ok(&["build"]).contains("Generating"));
-    p.write("src/bin/check/message.ui", "<interface> </interface>\n");
+    p.write(resource, &"b".repeat(6_000));
     assert!(p.ok(&["run", "check"]).contains("glib-compile-resources"));
+    assert!(!p.ok(&["build"]).contains("Generating"));
+
+    if have("cmake") && have("ninja") {
+        p.ok(&["export-cmake"]);
+        let cmake = |args: &[&str]| {
+            let out = Command::new("cmake")
+                .args(args)
+                .current_dir(&p.dir)
+                .env("CC", "clang")
+                .env("CXX", "clang++")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "cmake {args:?}:\n{}", text(&out));
+            text(&out)
+        };
+        cmake(&["-S", ".", "-B", "build-cmake", "-G", "Ninja"]);
+        assert!(cmake(&["--build", "build-cmake"]).contains("Generating"));
+        assert!(!cmake(&["--build", "build-cmake"]).contains("Generating"));
+        p.write(resource, &"c".repeat(6_000));
+        assert!(cmake(&["--build", "build-cmake"]).contains("Generating"));
+    }
 }
 
 #[test]
@@ -518,6 +545,22 @@ printf 'install\n' >>conan-calls
     p.write("conanfile.txt", "[requires]\nfixture/2\n");
     build();
     assert_eq!(calls(), 2);
+
+    p.write("conan.lock", "first revision");
+    p.write(
+        "build/conan/.install/packages/incomplete.pc",
+        "partial install",
+    );
+    build();
+    assert_eq!(calls(), 3);
+    build();
+    assert_eq!(calls(), 3);
+    p.write("conan.lock", "second revision");
+    build();
+    assert_eq!(calls(), 4);
+    p.remove("conan.lock");
+    build();
+    assert_eq!(calls(), 5);
 }
 
 #[test]
@@ -581,7 +624,9 @@ fn header_units_rebuild_and_share_with_named_modules() {
         "export module arrays;\nexport import <array>;\n",
     );
     let source = "src/bin/demo/main.cpp";
-    let main = fs::read_to_string(p.dir.join(source)).unwrap();
+    let main = fs::read_to_string(p.dir.join(source))
+        .unwrap()
+        .replace("import <array>;", "import \"array\";");
     p.write(source, &format!("import arrays;\n{main}"));
     let header = "src/bin/demo/input.hpp";
     p.write(header, "inline constexpr int input = 21;\n");

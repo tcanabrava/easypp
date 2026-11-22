@@ -33,15 +33,17 @@ pub fn metadata_files() -> Vec<PathBuf> {
 }
 
 const MANIFEST: &str = "conanfile.txt";
+const LOCKFILE: &str = "conan.lock";
 
 fn needs_install(root: &Path) -> bool {
     let manifest = root.join(MANIFEST);
     if !manifest.is_file() {
         return false;
     }
-    let installed = package_dir().unwrap().join(MANIFEST);
-    let stale = installed.is_file() && fs::read(&manifest).ok() != fs::read(&installed).ok();
-    stale || metadata_files().is_empty()
+    let installed = package_dir().unwrap();
+    fs::read(&manifest).ok() != fs::read(installed.join(MANIFEST)).ok()
+        || fs::read(root.join(LOCKFILE)).ok() != fs::read(installed.join(LOCKFILE)).ok()
+        || metadata_files().is_empty()
 }
 
 pub fn ensure_installed(root: &Path, opts: &Options) -> Result<(), String> {
@@ -84,8 +86,26 @@ pub fn install(requested: &[String], flags: &[String], opts: &Options) -> Result
     let dir = package_dir().expect("configured project root");
     let parent = dir.parent().unwrap();
     fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-    // Both profiles share the manifest, so serialize dependency operations.
+    // The OS releases this lock even if the installer is interrupted.
+    let lock_path = parent.join(".install.lock");
+    let lock = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
+    lock.try_lock()
+        .map_err(|e| format!("cannot lock Conan dependency installation: {e}"))?;
     let staging = parent.join(".install");
+    recover_metadata(parent, &staging)?;
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|e| {
+            format!(
+                "cannot remove interrupted Conan installation at {}: {e}",
+                staging.display()
+            )
+        })?;
+    }
     fs::create_dir(&staging).map_err(|e| format!("cannot create {}: {e}", staging.display()))?;
     let result = install_into(dir, &staging, requested, flags, opts);
     // Keep the backup if rollback itself failed.
@@ -93,6 +113,35 @@ pub fn install(requested: &[String], flags: &[String], opts: &Options) -> Result
         let _ = fs::remove_dir_all(&staging);
     }
     result
+}
+
+fn recover_metadata(parent: &Path, staging: &Path) -> Result<(), String> {
+    let previous = staging.join("previous");
+    if !previous.exists() {
+        return Ok(());
+    }
+    let profile = fs::read_to_string(staging.join("profile")).unwrap_or_default();
+    if !matches!(profile.as_str(), "debug" | "release") {
+        return Err(format!(
+            "cannot identify the profile for Conan metadata at {}",
+            previous.display()
+        ));
+    }
+    let target = parent.join(profile);
+    if target.exists() {
+        fs::remove_dir_all(&target).map_err(|e| {
+            format!(
+                "cannot remove interrupted Conan metadata at {}: {e}",
+                target.display()
+            )
+        })?;
+    }
+    fs::rename(&previous, &target).map_err(|e| {
+        format!(
+            "cannot restore Conan metadata from {}: {e}",
+            previous.display()
+        )
+    })
 }
 
 /// Find or install an isolated user-local Conan without changing PATH.
@@ -192,6 +241,11 @@ fn install_into(
     };
 
     let candidate = staging.join(MANIFEST);
+    let lockfile = match fs::read(LOCKFILE) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("cannot read {LOCKFILE}: {e}")),
+    };
     let recipe = if requested.is_empty() {
         previous
     } else {
@@ -201,9 +255,9 @@ fn install_into(
         project_recipe
     } else {
         fs::write(&candidate, &recipe).map_err(|e| format!("cannot stage {MANIFEST}: {e}"))?;
-        if Path::new("conan.lock").is_file() {
-            fs::copy("conan.lock", staging.join("conan.lock"))
-                .map_err(|e| format!("cannot stage conan.lock: {e}"))?;
+        if let Some(bytes) = &lockfile {
+            fs::write(staging.join(LOCKFILE), bytes)
+                .map_err(|e| format!("cannot stage {LOCKFILE}: {e}"))?;
         }
         &candidate
     };
@@ -246,10 +300,16 @@ fn install_into(
     }
     fs::write(output.join(MANIFEST), &recipe)
         .map_err(|e| format!("cannot record installed Conan manifest: {e}"))?;
+    if let Some(bytes) = lockfile {
+        fs::write(output.join(LOCKFILE), bytes)
+            .map_err(|e| format!("cannot record installed Conan lockfile: {e}"))?;
+    }
 
     let old = staging.join("previous");
     let replacing = dir.exists();
     if replacing {
+        fs::write(staging.join("profile"), opts.profile())
+            .map_err(|e| format!("cannot record the Conan installation profile: {e}"))?;
         fs::rename(dir, &old).map_err(|e| format!("cannot replace Conan metadata: {e}"))?;
     }
     if let Err(e) = fs::rename(&output, dir) {

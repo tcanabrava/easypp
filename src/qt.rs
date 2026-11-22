@@ -13,6 +13,7 @@
 //! include path of that component and of everything that uses it.
 
 use crate::system::SysDep;
+use quick_xml::{Reader, events::Event};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,12 +52,7 @@ impl QtFiles {
         };
         QtFiles {
             moc,
-            ui: with_ext("ui")
-                .into_iter()
-                .filter(|p| {
-                    fs::read_to_string(p).is_ok_and(|s| s.contains("<ui ") || s.contains("<ui>"))
-                })
-                .collect(),
+            ui: with_ext("ui").into_iter().filter(|p| is_qt_ui(p)).collect(),
             qrc: with_ext("qrc"),
             kconfig: with_ext("kcfgc"),
             gresource: files
@@ -96,6 +92,20 @@ impl QtFiles {
             }
         }
         parts.join("; ")
+    }
+}
+
+fn is_qt_ui(path: &Path) -> bool {
+    let Ok(mut reader) = Reader::from_file(path) else {
+        return false;
+    };
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(root) | Event::Empty(root)) => return root.name().as_ref() == "ui",
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => buffer.clear(),
+        }
     }
 }
 
@@ -295,8 +305,11 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
 pub fn glib_resources(plan: &mut Plan, files: &QtFiles, dir: &Path) {
     for (i, manifest) in files.gresource.iter().enumerate() {
         let output = dir.join(format!("gresource_{i}.c"));
+        let depfile = output.with_extension("d");
         let mut inputs = vec![manifest.clone()];
-        inputs.extend(resource_files(manifest));
+        if let Ok(text) = fs::read_to_string(&depfile) {
+            inputs.extend(crate::builder::depfile_paths(&text));
+        }
         plan.resources.push(output.clone());
         plan.generate.push(Step {
             tool: "glib-compile-resources",
@@ -315,10 +328,12 @@ pub fn glib_resources(plan: &mut Plan, files: &QtFiles, dir: &Path) {
                 manifest.parent().unwrap().display().to_string(),
                 "--target".into(),
                 output.display().to_string(),
+                "--dependency-file".into(),
+                depfile.display().to_string(),
                 manifest.display().to_string(),
             ],
             inputs,
-            additional_outputs: vec![],
+            additional_outputs: vec![depfile],
         });
     }
 }
@@ -358,8 +373,8 @@ pub fn moc_flags(compile_flags: &[String]) -> Vec<String> {
     out
 }
 
-/// Files listed in Qt and GLib resource manifests.
-pub(crate) fn resource_files(qrc: &Path) -> Vec<PathBuf> {
+/// Files listed in Qt resource manifests.
+fn resource_files(qrc: &Path) -> Vec<PathBuf> {
     let Ok(text) = fs::read_to_string(qrc) else {
         return Vec::new();
     };

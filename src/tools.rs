@@ -179,8 +179,8 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
     tool("clang-tidy")?;
     // clang-tidy reads the compile commands, and Qt sources need their
     // generated headers.
-    builder::update_compile_commands(project, opts)?;
     builder::generate(project, opts)?;
+    builder::update_compile_commands(project, opts)?;
 
     let files = own_files(&project.root, true);
     let config = if project.root.join(".clang-tidy").exists() {

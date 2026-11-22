@@ -233,8 +233,6 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         .iter()
         .map(|t| (*t, target_component(project, opts, t)))
         .collect();
-    write_compile_commands(project, opts, &libs)?;
-
     // 1. Qt code generation.
     let plans: Vec<&qt::Plan> = libs
         .values()
@@ -242,6 +240,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         .map(|c| &c.plan)
         .collect();
     run_codegen(project, &plans, opts)?;
+    write_compile_commands(project, opts, &libs)?;
 
     // 2. Compile (in parallel) everything that is out of date.
     let units = libs
@@ -502,21 +501,31 @@ fn header_unit(
     header: &crate::modules::HeaderUnit,
 ) -> (PathBuf, Vec<String>) {
     let mut cmd = compile_flags(project, opts, src, flags);
+    let mut search = cmd.clone();
     let language = if header.quoted {
         let parent = src.parent().unwrap();
         if parent.join(&header.name).is_file() {
-            cmd.extend(["-iquote".into(), path_str(parent)]);
+            search.extend(["-iquote".into(), path_str(parent)]);
         }
         "c++-user-header"
     } else {
         "c++-system-header"
     };
-    cmd.extend(["-x".into(), language.into(), "--precompile".into()]);
+    search.extend(["-x".into(), language.into()]);
+    let input = if let Some(path) = project.modules.resolve_header(search.clone(), &header.name) {
+        cmd.extend(["-x".into(), "c++-header".into(), "-fmodule-header".into()]);
+        path_str(&path)
+    } else {
+        // Let the precompile command report the compiler's full diagnostic.
+        cmd = search;
+        header.name.clone()
+    };
+    cmd.push("--precompile".into());
 
     // Clang identifies header units by their underlying header. Importers
     // with the same compiler context must refer to the same PCM.
     let mut hash = DefaultHasher::new();
-    (&cmd, &header.name).hash(&mut hash);
+    (&cmd, &input).hash(&mut hash);
     let output = opts
         .dir()
         .join("obj/header-units")
@@ -531,7 +540,7 @@ fn header_unit(
         "-o".into(),
         path_str(&output),
         "--".into(),
-        header.name.clone(),
+        input,
     ]);
     (output, cmd)
 }
@@ -564,10 +573,13 @@ fn compile_header_units<'a>(
             }
             let (output, cmd) = header_unit(project, opts, src, flags, header);
             if seen.insert(output.clone())
-                && !depfile_inputs(&depfile_path(&output)).is_some_and(|mut inputs| {
-                    inputs.extend(compiler.iter().cloned());
-                    up_to_date(&output, &cmd, &inputs)
-                })
+                && !fs::read_to_string(depfile_path(&output))
+                    .ok()
+                    .is_some_and(|text| {
+                        let mut inputs = depfile_paths(&text);
+                        inputs.extend(compiler.iter().cloned());
+                        up_to_date(&output, &cmd, &inputs)
+                    })
             {
                 jobs.push(Job {
                     verb: "Precompiling",
@@ -832,6 +844,9 @@ fn compile_flags(
     if project.modules.is_standard_source(src) {
         flags.push("-w".into());
     }
+    if src.starts_with(opts.dir().join("gen")) && Lang::of(src) == Some(Lang::C) {
+        flags.push("-Wno-overlength-strings".into());
+    }
     flags
 }
 
@@ -1059,10 +1074,15 @@ fn up_to_date(output: &Path, cmd: &[String], inputs: &[PathBuf]) -> bool {
 
 /// Parses a Makefile-style depfile written by `clang -MD -MP`.
 fn depfile_inputs(path: &Path) -> Option<Vec<PathBuf>> {
-    let text = fs::read_to_string(path)
-        .ok()?
-        .replace("\\\r\n", " ")
-        .replace("\\\n", " ");
+    let text = fs::read_to_string(path).ok()?;
+    let mut paths = depfile_paths(&text);
+    // Skip the compiler's absolute system header paths on ordinary builds.
+    paths.retain(|path| path.is_relative());
+    Some(paths)
+}
+
+pub(crate) fn depfile_paths(text: &str) -> Vec<PathBuf> {
+    let text = text.replace("\\\r\n", " ").replace("\\\n", " ");
     let mut out = Vec::new();
     let mut current = String::new();
     let mut chars = text.chars().peekable();
@@ -1084,10 +1104,7 @@ fn depfile_inputs(path: &Path) -> Option<Vec<PathBuf>> {
         }
     }
     flush(&mut current, &mut out);
-    // Project, third-party and generated files are relative; system headers
-    // (/usr/include/...) are absolute and not worth a stat on every build.
-    out.retain(|p| p.is_relative());
-    Some(out)
+    out
 }
 
 #[cfg(test)]
