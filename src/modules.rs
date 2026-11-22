@@ -3,6 +3,7 @@ use crate::cond::Conditions;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Default, Debug)]
 struct Unit {
@@ -22,6 +23,7 @@ pub struct Modules {
     units: BTreeMap<PathBuf, Unit>,
     providers: BTreeMap<String, (PathBuf, Option<String>)>,
     plans: BTreeMap<PathBuf, Plan>,
+    standard: BTreeMap<PathBuf, Vec<String>>,
 }
 
 #[derive(Default, Debug)]
@@ -58,6 +60,7 @@ impl Modules {
                 graph.units.insert(path, unit);
             }
         }
+        graph.add_standard_modules()?;
         let mut active = BTreeSet::new();
         for path in graph.units.keys() {
             visit(
@@ -98,6 +101,121 @@ impl Modules {
         self.units.is_empty()
     }
 
+    pub fn standard_sources(&self) -> impl Iterator<Item = (&Path, &[String])> {
+        self.standard
+            .iter()
+            .map(|(path, flags)| (path.as_path(), flags.as_slice()))
+    }
+
+    pub fn required_standard_sources<'a, 'b>(
+        &'a self,
+        sources: impl Iterator<Item = &'b Path>,
+    ) -> BTreeSet<&'a Path> {
+        if self.standard.is_empty() {
+            return BTreeSet::new();
+        }
+        sources
+            .filter_map(|src| self.plan(src))
+            .flat_map(|plan| &plan.imports)
+            .map(|name| self.provider(name))
+            .filter(|path| self.is_standard_source(path))
+            .collect()
+    }
+
+    pub fn is_standard_source(&self, path: &Path) -> bool {
+        self.standard.contains_key(path)
+    }
+
+    fn add_standard_modules(&mut self) -> Result<(), String> {
+        let names: BTreeSet<&str> = self
+            .units
+            .values()
+            .flat_map(|unit| &unit.imports)
+            .map(String::as_str)
+            .filter(|name| {
+                matches!(*name, "std" | "std.compat") && !self.providers.contains_key(*name)
+            })
+            .collect();
+        if names.is_empty() {
+            return Ok(());
+        }
+        let needs_compat = names.contains("std.compat");
+        let manifest = standard_manifest()?;
+        let text = fs::read_to_string(&manifest).map_err(|e| {
+            format!(
+                "cannot read C++ module manifest {}: {e}",
+                manifest.display()
+            )
+        })?;
+        let data: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("invalid C++ module manifest {}: {e}", manifest.display()))?;
+        let entries = data["modules"]
+            .as_array()
+            .ok_or("C++ module manifest has no modules list")?;
+        let base = manifest.parent().unwrap();
+        for name in ["std", "std.compat"]
+            .into_iter()
+            .filter(|&name| name == "std" || needs_compat)
+        {
+            if self.providers.contains_key(name) {
+                continue;
+            }
+            let entry = entries
+                .iter()
+                .find(|entry| {
+                    entry["logical-name"].as_str() == Some(name)
+                        && entry["is-std-library"].as_bool() == Some(true)
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "{} does not provide the '{name}' module",
+                        manifest.display()
+                    )
+                })?;
+            let path = base.join(
+                entry["source-path"]
+                    .as_str()
+                    .ok_or("missing standard module source path")?,
+            );
+            let path = path.canonicalize().map_err(|e| {
+                format!(
+                    "cannot locate '{name}' module source {}: {e}",
+                    path.display()
+                )
+            })?;
+            if crate::project::Lang::of(&path) != Some(crate::project::Lang::Cpp) {
+                return Err(format!(
+                    "unsupported standard module source: {}",
+                    path.display()
+                ));
+            }
+            let flags = entry["local-arguments"]["system-include-directories"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|dir| dir.as_str())
+                .flat_map(|dir| ["-isystem".to_string(), base.join(dir).display().to_string()])
+                .collect();
+            let imports = if name == "std.compat" {
+                BTreeSet::from(["std".to_string()])
+            } else {
+                BTreeSet::new()
+            };
+            self.providers
+                .insert(name.to_string(), (path.clone(), None));
+            self.units.insert(
+                path.clone(),
+                Unit {
+                    provides: Some(name.to_string()),
+                    imports,
+                    ..Unit::default()
+                },
+            );
+            self.standard.insert(path, flags);
+        }
+        Ok(())
+    }
+
     /// Turn named imports into edges in the existing static-library graph.
     pub fn libraries(
         &self,
@@ -113,7 +231,9 @@ impl Modules {
                         Some(name) if Some(name.as_str()) != own => {
                             libraries.insert(name.clone());
                         }
-                        None if !sources.contains(provider) => {
+                        None if !self.is_standard_source(provider)
+                            && !sources.contains(provider) =>
+                        {
                             return Err(format!(
                                 "{} imports '{name}' from another executable or test ({}); move the module to src/libs/",
                                 src.display(),
@@ -127,6 +247,36 @@ impl Modules {
         }
         Ok(libraries)
     }
+}
+
+fn standard_manifest() -> Result<PathBuf, String> {
+    let query = |arg: &str| -> Option<PathBuf> {
+        let output = Command::new("clang++").arg(arg).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        if !path.is_absolute() {
+            return None;
+        }
+        path.canonicalize().ok().filter(|p| p.is_file())
+    };
+    if let Some(path) = query("-print-library-module-manifest-path") {
+        return Ok(path);
+    }
+    // Older drivers can locate the manifest as a library file but do not
+    // expose it through the dedicated driver query.
+    let macros = Command::new("clang++")
+        .args(["-dM", "-E", "-x", "c++", "-include", "version", "/dev/null"])
+        .output()
+        .map_err(|e| format!("cannot query Clang's C++ standard library: {e}"))?;
+    let macros = String::from_utf8_lossy(&macros.stdout);
+    let fallback = if macros.contains("#define _LIBCPP_VERSION ") {
+        "-print-file-name=libc++.modules.json"
+    } else {
+        "-print-file-name=libstdc++.modules.json"
+    };
+    query(fallback).ok_or_else(|| "import std requires a Clang-compatible standard library module manifest. Install your C++ standard library's module sources.".into())
 }
 
 type Providers = BTreeMap<String, (PathBuf, Option<String>)>;

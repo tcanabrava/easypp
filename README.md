@@ -59,8 +59,12 @@ options or `easypp help deps add` for a nested command.
   compiled module interfaces before their importers, and interface changes
   invalidate dependent objects. See the [modules example](examples/modules/README.md).
   Module declarations and imports must be written directly in source files.
-  `import std` and named modules supplied by external packages are outside
-  the current support.
+  Named modules supplied by external packages are outside the current support.
+- **Standard library modules**: `import std;` and `import std.compat;` use the
+  module sources supplied by Clang's selected C++ standard library. Easypp
+  discovers them from its installed JSON manifest and compiles only the
+  modules a build needs. See the [standard modules example](examples/std-module/README.md).
+  Projects using these imports currently build through easypp directly.
 - **C++ header units**: `import "header.hpp";` and `import <array>;` compile the
   header as a Clang PCM. The same discovery rules used for includes determine
   library dependencies. Changes to the imported header or its textual includes

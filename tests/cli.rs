@@ -599,3 +599,34 @@ fn header_units_rebuild_and_share_with_named_modules() {
 
     assert!(p.fails(&["export-cmake"]).contains("header units"));
 }
+
+#[test]
+#[ignore = "requires a Clang-compatible standard library module manifest"]
+fn standard_library_modules_build_on_demand() {
+    let p = Project::new("std-module");
+    p.remove("src");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/std-module/src");
+    assert!(
+        Command::new("cp")
+            .arg("-R")
+            .arg(example)
+            .arg(&p.dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let demo = p.ok(&["run", "--release", "-j4"]);
+    assert!(demo.lines().any(|line| line == "42"), "{demo}");
+    let outputs = || {
+        fs::read_dir(p.dir.join("build/release/obj/standard-modules"))
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "pcm"))
+            .count()
+    };
+    assert_eq!(outputs(), 1);
+    assert!(p.ok(&["test", "--release", "-j4"]).contains("1 passed"));
+    assert_eq!(outputs(), 2);
+    assert!(!p.ok(&["build", "--release"]).contains("Compiling"));
+}

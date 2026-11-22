@@ -559,8 +559,9 @@ system libraries must be installed, and third-party code must be copied into
 `src/thirdparty`. It has no per-target flags, code generation other than Qt's
 (moc, uic, rcc) and KDE KConfig, install step or shared libraries. Project-local C++
 modules and header units are supported through explicit imports in source files.
-Standard-library named modules and named modules from external packages are
-outside this scope. CMake export supports named modules only.
+Easypp can build standard-library modules when the installed toolchain ships
+their source manifest. Named modules from external packages are outside this
+scope. CMake export supports project-local named modules.
 These are not
 oversights: each one would add a configuration surface. But they put a clear limit
 on where the tool can be used.

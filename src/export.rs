@@ -16,6 +16,9 @@ pub fn write(project: &Project, force: bool) -> Result<(), String> {
                 .into(),
         );
     }
+    if project.modules.standard_sources().next().is_some() {
+        return Err("CMake export does not yet configure standard library modules. Build this project with easypp.".into());
+    }
     let path = project.root.join("CMakeLists.txt");
     if path.exists() && !force {
         return Err("CMakeLists.txt already exists; use --force to replace it".into());

@@ -10,7 +10,7 @@ use crate::hints;
 use crate::project::{Kind, Lang, Project, Target};
 use crate::qt::{self, QtFiles};
 use crate::ui;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
@@ -253,6 +253,9 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
                 .chain(&c.resources)
                 .map(move |s| (s, c.cflags.as_slice()))
         });
+    let required_standard = project
+        .modules
+        .required_standard_sources(units.clone().map(|(src, _)| src.as_path()));
     let sanitizer = sanitizer_defaults_source(opts);
     if opts.sanitizers() {
         let src = &sanitizer;
@@ -268,7 +271,13 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         opts,
         units
             .map(|(src, flags)| (src.as_path(), flags))
-            .chain(sanitizer_unit),
+            .chain(sanitizer_unit)
+            .chain(
+                project
+                    .modules
+                    .standard_sources()
+                    .filter(|(path, _)| required_standard.contains(path)),
+            ),
     )?;
 
     // 3. One static archive per library that has objects.
@@ -313,6 +322,14 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
             .filter(|n| !libs[*n].sources.is_empty())
             .map(|n| archive_path(opts, n))
             .collect();
+
+        let standard_modules: BTreeSet<&Path> = project.modules.required_standard_sources(
+            own.sources
+                .iter()
+                .chain(used.iter().flat_map(|lib| lib.sources.iter()))
+                .map(PathBuf::as_path),
+        );
+        objects.extend(standard_modules.iter().map(|path| object_path(opts, path)));
 
         let any_cpp = own
             .sources
@@ -373,6 +390,10 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
     let components = libs.values().chain(targets.iter().map(|(_, c)| c));
 
     let mut expected: HashSet<PathBuf> = HashSet::new();
+    for (src, _) in project.modules.standard_sources() {
+        expected.insert(object_path(opts, src));
+        expected.insert(bmi_path(opts, src));
+    }
     for c in components {
         for src in c.sources.iter().chain(&c.resources) {
             expected.insert(object_path(opts, src));
@@ -619,7 +640,11 @@ pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
             .filter(|src| project.modules.provides(src))
             .map(|src| (src.as_path(), component.cflags.as_slice()))
     });
-    compile_units(project, opts, providers)
+    compile_units(
+        project,
+        opts,
+        providers.chain(project.modules.standard_sources()),
+    )
 }
 
 /// One command producing one file: a compilation or a code generator.
@@ -791,7 +816,7 @@ fn compile_flags(
         (Lang::Cpp, true) => "-std=gnu++23",
     };
     let mut cmd: Vec<String> = vec![driver(lang).into(), std.into()];
-    if third_party {
+    if third_party || project.modules.is_standard_source(src) {
         cmd.push("-w".into());
     } else {
         cmd.extend(WARNINGS.map(String::from));
@@ -937,6 +962,14 @@ fn json_str(s: &str) -> String {
 /// `build/debug/gen/libs/foo/moc_a.cpp` -> `build/debug/obj/gen/libs/foo/moc_a.cpp.o`
 fn object_path(opts: &Options, src: &Path) -> PathBuf {
     let dir = opts.dir();
+    if src.is_absolute() {
+        // Toolchain module sources must never write objects next to the installed header.
+        let mut hash = DefaultHasher::new();
+        src.hash(&mut hash);
+        return dir
+            .join("obj/standard-modules")
+            .join(format!("{:016x}.o", hash.finish()));
+    }
     let rel = src
         .strip_prefix("src")
         .or_else(|_| src.strip_prefix(&dir))
