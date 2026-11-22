@@ -18,11 +18,16 @@ use quick_xml::{Reader, events::Event};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// What `includes()` reports for a file that declares a Qt meta-object.
 pub const MOC_MARKER: &str = "#qt moc";
+pub(crate) const QML_MANIFEST: &str = "easypp_qml.qrc";
+pub(crate) const QML_TYPEINFO: &str = "easypp.qmltypes";
 
 /// Lines that make a file need moc.
 pub fn needs_moc(line: &str) -> bool {
@@ -49,10 +54,17 @@ pub struct QmlResources {
     pub base: PathBuf,
     pub prefix: String,
     pub files: Vec<PathBuf>,
+    pub module: Option<QmlModule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct QmlModule {
+    pub uri: String,
+    pub qmldir: PathBuf,
 }
 
 impl QtFiles {
-    pub fn from_files(base: &Path, files: &[PathBuf], moc: Vec<PathBuf>) -> QtFiles {
+    pub fn from_files(base: &Path, files: &[PathBuf], moc: Vec<PathBuf>) -> Result<Self, String> {
         let with_ext = |ext: &str| -> Vec<PathBuf> {
             files
                 .iter()
@@ -61,37 +73,68 @@ impl QtFiles {
                 .collect()
         };
         let qrc = with_ext("qrc");
-        let qml = if !base.starts_with("src/thirdparty") && !with_ext("qml").is_empty() {
+        let module = qml_module(base)?;
+        if module.is_some() {
+            for source in moc
+                .iter()
+                .filter(|path| crate::project::Lang::of(path).is_some())
+            {
+                let text =
+                    fs::read_to_string(source).map_err(|e| format!("{}: {e}", source.display()))?;
+                if text.lines().map(str::trim_start).any(|line| {
+                    let token = line
+                        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                        .next();
+                    matches!(token, Some("QML_ELEMENT" | "QML_NAMED_ELEMENT"))
+                }) {
+                    return Err(format!(
+                        "{}: declare QML-registered C++ types in headers",
+                        source.display()
+                    ));
+                }
+            }
+        }
+        let qml = if module.is_some()
+            || (!base.starts_with("src/thirdparty") && !with_ext("qml").is_empty())
+        {
             let explicit: HashSet<_> = qrc
                 .iter()
                 .flat_map(|path| resource_files(path))
                 .filter_map(|path| path.canonicalize().ok())
                 .collect();
+            let qml_base = module.as_ref().map_or(base, |m| m.qmldir.parent().unwrap());
             let files: Vec<_> = files
                 .iter()
+                .filter(|path| path.starts_with(qml_base))
                 .filter(|path| {
                     (matches!(
                         path.extension().and_then(|e| e.to_str()),
                         Some("qml" | "js" | "mjs")
                     ) || path.file_name().is_some_and(|name| name == "qmldir"))
-                        && (explicit.is_empty()
+                        && (module.as_ref().is_some_and(|m| **path == m.qmldir)
+                            || explicit.is_empty()
                             || !path
                                 .canonicalize()
                                 .is_ok_and(|path| explicit.contains(&path)))
                 })
                 .cloned()
                 .collect();
+            let qml_base = qml_base.to_path_buf();
             (!files.is_empty()).then(|| QmlResources {
-                base: base.to_path_buf(),
-                prefix: base
-                    .strip_prefix(crate::project::LIBS_DIR)
-                    .map_or_else(|_| "/".into(), |lib| format!("/libs/{}", lib.display())),
+                base: qml_base,
+                prefix: if let Some(module) = &module {
+                    format!("/qt/qml/{}", module.uri.replace('.', "/"))
+                } else {
+                    base.strip_prefix(crate::project::LIBS_DIR)
+                        .map_or_else(|_| "/".into(), |lib| format!("/libs/{}", lib.display()))
+                },
                 files,
+                module,
             })
         } else {
             None
         };
-        QtFiles {
+        Ok(QtFiles {
             moc,
             ui: with_ext("ui").into_iter().filter(|p| is_qt_ui(p)).collect(),
             qrc,
@@ -102,7 +145,7 @@ impl QtFiles {
                 .filter(|p| p.to_string_lossy().ends_with(".gresource.xml"))
                 .cloned()
                 .collect(),
-        }
+        })
     }
 
     pub fn needs_qt(&self) -> bool {
@@ -115,6 +158,14 @@ impl QtFiles {
 
     pub fn is_empty(&self) -> bool {
         !self.needs_qt() && self.gresource.is_empty()
+    }
+
+    pub fn qml_header_dirs(&self) -> std::collections::BTreeSet<&Path> {
+        self.moc
+            .iter()
+            .filter(|path| crate::project::Lang::of(path).is_none())
+            .filter_map(|path| path.parent())
+            .collect()
     }
 
     pub fn summary(&self) -> String {
@@ -141,6 +192,42 @@ impl QtFiles {
     }
 }
 
+fn qml_module(base: &Path) -> Result<Option<QmlModule>, String> {
+    if !base.starts_with(crate::project::BIN_DIR) && !base.starts_with(crate::project::TESTS_DIR) {
+        return Ok(None);
+    }
+    let qmldir = base.join("qml/qmldir");
+    if !qmldir.is_file() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(&qmldir).map_err(|e| format!("{}: {e}", qmldir.display()))?;
+    let mut directives = contents.lines().filter_map(|line| {
+        let mut words = line.split('#').next()?.split_whitespace();
+        (words.next()? == "module").then_some(words)
+    });
+    let Some(mut words) = directives.next() else {
+        return Ok(None);
+    };
+    let uri = words.next().unwrap_or_default();
+    let valid = uri.split('.').all(|part| {
+        let mut bytes = part.bytes();
+        bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+            && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    });
+    if !valid || words.next().is_some() || directives.next().is_some() {
+        return Err(format!(
+            "{}: expected one valid QML module URI",
+            qmldir.display()
+        ));
+    }
+    Ok(Some(QmlModule {
+        uri: uri.into(),
+        qmldir,
+    }))
+}
+
 fn is_qt_ui(path: &Path) -> bool {
     let Ok(mut reader) = Reader::from_file(path) else {
         return false;
@@ -161,6 +248,8 @@ pub struct QtTools {
     pub moc: PathBuf,
     pub uic: PathBuf,
     pub rcc: PathBuf,
+    pub qmltyperegistrar: Option<PathBuf>,
+    pub qmllint: Option<PathBuf>,
 }
 
 /// Only Qt 6 is supported.
@@ -171,6 +260,73 @@ pub fn is_qt(dep: &SysDep) -> bool {
 /// Qt 5 packages are ignored entirely when resolving headers.
 pub fn is_unsupported_package(name: &str) -> bool {
     name.starts_with("Qt5")
+}
+
+/// Forward Qt diagnostics as they arrive and explain unresolved runtime imports
+/// if the application exits unsuccessfully.
+pub fn run_qml(command: &mut Command) -> io::Result<ExitStatus> {
+    if std::env::var_os("QT_FORCE_STDERR_LOGGING").is_none() {
+        command.env("QT_FORCE_STDERR_LOGGING", "1");
+    }
+    let mut child = command.stderr(Stdio::piped()).spawn()?;
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut missing = std::collections::BTreeSet::new();
+        let mut line = Vec::new();
+        let mut buf = [0; 4096];
+        loop {
+            let n = match stderr.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            let _ = io::stderr().write_all(&buf[..n]);
+            for segment in buf[..n].split_inclusive(|byte| *byte == b'\n') {
+                if line.len() < 8192 {
+                    line.extend_from_slice(segment);
+                }
+                if segment.ends_with(b"\n") {
+                    if let Some(uri) = missing_import(&String::from_utf8_lossy(&line)) {
+                        missing.insert(uri.to_owned());
+                    }
+                    line.clear();
+                }
+            }
+        }
+        if let Some(uri) = missing_import(&String::from_utf8_lossy(&line)) {
+            missing.insert(uri.to_owned());
+        }
+        let _ = send.send(missing);
+    });
+    let status = child.wait()?;
+    // A subprocess can inherit stderr and keep the pipe open after Qt exits.
+    if let Ok(missing) = receive.recv_timeout(Duration::from_millis(100))
+        && !status.success()
+    {
+        for uri in missing {
+            crate::ui::warn(&format!(
+                "QML module '{uri}' was unavailable at runtime. Install the Qt 6 QML package that provides it, or add its import root to QML_IMPORT_PATH."
+            ));
+        }
+    }
+    Ok(status)
+}
+
+fn missing_import(line: &str) -> Option<&str> {
+    let (_, tail) = line.split_once("module \"")?;
+    let (uri, tail) = tail.split_once('"')?;
+    let tail = match tail.strip_prefix(" version ") {
+        Some(version) => version.trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.'),
+        None => tail,
+    };
+    (!uri.is_empty()
+        && tail.starts_with(" is not installed")
+        && uri
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_')))
+    .then_some(uri)
 }
 
 /// Finds moc, uic and rcc when `deps` use Qt 6.
@@ -208,6 +364,8 @@ pub fn find_tools<'a>(mut deps: impl Iterator<Item = &'a SysDep>) -> Option<QtTo
         moc: find("moc")?,
         uic: find("uic")?,
         rcc: find("rcc")?,
+        qmltyperegistrar: find("qmltyperegistrar"),
+        qmllint: find("qmllint"),
     })
 }
 
@@ -234,6 +392,8 @@ pub struct Plan {
     /// Generated resource sources (qrc_*.cpp), linked directly into programs.
     pub resources: Vec<PathBuf>,
     pub qml_manifest: Option<(PathBuf, String)>,
+    pub qml_registration: Option<Step>,
+    pub qml_resource: Option<Step>,
 }
 
 /// Plans the generated files of a component. `moc_flags` are the component's
@@ -301,6 +461,8 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         });
     }
 
+    let module = files.qml.as_ref().and_then(|qml| qml.module.as_ref());
+    let mut metatypes = Vec::new();
     for input in &files.moc {
         let is_source = crate::project::Lang::of(input).is_some();
         let output = if is_source {
@@ -314,9 +476,16 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         if !is_source {
             plan.sources.push(output.clone());
         }
+        let mut additional_outputs = Vec::new();
+        if module.is_some() && !is_source {
+            cmd.push("--output-json".into());
+            let json = output.with_extension("cpp.json");
+            metatypes.push(json.clone());
+            additional_outputs.push(json);
+        }
         plan.generate.push(Step {
             tool: "moc",
-            additional_outputs: vec![],
+            additional_outputs,
             input: input.clone(),
             inputs: vec![input.clone()],
             output,
@@ -346,7 +515,7 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         });
     }
     if let Some(qml) = &files.qml {
-        let manifest = unique("easypp_qml".into(), ".qrc");
+        let manifest = gen_dir.join(QML_MANIFEST);
         let output = unique("qrc_easypp_qml".into(), ".cpp");
         let name = format!(
             "easypp_qml_{}",
@@ -359,6 +528,40 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         );
         let mut contents = format!("<RCC><qresource prefix=\"{}\">\n", escape(&qml.prefix));
         let back_to_root = "../".repeat(gen_dir.components().count());
+        let mut inputs = qml.files.clone();
+        if let Some(module) = module {
+            let registration = gen_dir.join("easypp_qml_registration.cpp");
+            let typeinfo = gen_dir.join(QML_TYPEINFO);
+            let registrar = tools
+                .qmltyperegistrar
+                .as_ref()
+                .expect("validated QML registrar");
+            let mut cmd = vec![
+                s(registrar),
+                "--import-name".into(),
+                module.uri.clone(),
+                "--major-version".into(),
+                "1".into(),
+                "--minor-version".into(),
+                "0".into(),
+                "--generate-qmltypes".into(),
+                s(&typeinfo),
+                "-o".into(),
+                s(&registration),
+            ];
+            cmd.extend(metatypes.iter().map(|path| s(path)));
+            plan.qml_registration = Some(Step {
+                tool: "qmltyperegistrar",
+                input: module.qmldir.clone(),
+                inputs: metatypes,
+                output: registration.clone(),
+                additional_outputs: vec![typeinfo.clone()],
+                cmd,
+            });
+            plan.sources.push(registration);
+            inputs.push(typeinfo);
+            let _ = writeln!(contents, "  <file>{QML_TYPEINFO}</file>");
+        }
         for file in &qml.files {
             let alias = s(file
                 .strip_prefix(&qml.base)
@@ -374,11 +577,9 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         contents.push_str("</qresource></RCC>\n");
         plan.qml_manifest = Some((manifest.clone(), contents));
         plan.resources.push(output.clone());
-        plan.generate.push(Step {
+        plan.qml_resource = Some(Step {
             tool: "rcc (QML)",
-            inputs: std::iter::once(manifest.clone())
-                .chain(qml.files.iter().cloned())
-                .collect(),
+            inputs: std::iter::once(manifest.clone()).chain(inputs).collect(),
             cmd: vec![
                 s(&tools.rcc),
                 "--name".into(),
@@ -498,6 +699,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reads_missing_qml_import_diagnostics() {
+        assert_eq!(
+            missing_import("qrc:/Main.qml:2:1: module \"QtQuick.Controls\" is not installed"),
+            Some("QtQuick.Controls")
+        );
+        assert_eq!(
+            missing_import("module \"QtQuick\" version 999.0 is not installed"),
+            Some("QtQuick")
+        );
+        assert_eq!(
+            missing_import("module \"QtQuick\" has no type called Window"),
+            None
+        );
+    }
+
+    #[test]
     fn detects_meta_object_macros() {
         assert!(needs_moc("    Q_OBJECT"));
         assert!(needs_moc("Q_GADGET"));
@@ -513,6 +730,8 @@ mod tests {
             moc: "/qt/moc".into(),
             uic: "/qt/uic".into(),
             rcc: "/qt/rcc".into(),
+            qmltyperegistrar: None,
+            qmllint: None,
         };
         let files = QtFiles {
             moc: vec![

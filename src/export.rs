@@ -31,6 +31,7 @@ fn cmake_dep(dep: &SysDep) -> String {
         SysDep::Pkg(name) => format!("PkgConfig::{}", pkg_var(name)),
         SysDep::Lib { name, .. } => name.clone(),
         SysDep::OpenMp => "OpenMP::OpenMP_CXX".into(),
+        SysDep::CudaRuntime => "CUDA::cudart".into(),
     }
 }
 
@@ -130,7 +131,40 @@ fn cmake(project: &Project) -> String {
         "3.28"
     };
     let _ = writeln!(w, "cmake_minimum_required(VERSION {version})");
-    let _ = writeln!(w, "project({name} LANGUAGES C CXX)\n");
+    let cuda = if crate::cuda::contains_sources(
+        project
+            .libs
+            .values()
+            .flat_map(|lib| &lib.sources)
+            .chain(targets.iter().flat_map(|target| &target.sources)),
+    ) {
+        " CUDA"
+    } else {
+        ""
+    };
+    if !cuda.is_empty()
+        && let Some(code) = project
+            .cuda
+            .as_ref()
+            .and_then(crate::cuda::Toolkit::architecture)
+            .and_then(|arch| arch.strip_prefix("sm_"))
+    {
+        let _ = writeln!(
+            w,
+            "set(CMAKE_CUDA_ARCHITECTURES {code} CACHE STRING \"CUDA architectures\")"
+        );
+    }
+    let _ = writeln!(w, "project({name} LANGUAGES C CXX{cuda})\n");
+    if !cuda.is_empty() {
+        let _ = writeln!(
+            w,
+            "set(CMAKE_CUDA_STANDARD {})\nset(CMAKE_CUDA_STANDARD_REQUIRED ON)",
+            crate::cuda::STANDARD
+        );
+    }
+    if project.cuda.is_some() {
+        let _ = writeln!(w, "find_package(CUDAToolkit REQUIRED)\n");
+    }
     if standard_modules {
         let _ = writeln!(
             w,
@@ -160,11 +194,20 @@ endif()
         w,
         "# The project's own code: every warning is an error. Third-party code: no warnings."
     );
-    let _ = writeln!(
-        w,
-        "set(EASYPP_WARNINGS {})\n",
-        crate::builder::WARNINGS.join(" ")
-    );
+    if project.cuda.is_some() {
+        let _ = writeln!(
+            w,
+            "set(EASYPP_WARNINGS \"$<$<COMPILE_LANGUAGE:CUDA>:{}>\" \"$<$<NOT:$<COMPILE_LANGUAGE:CUDA>>:{}>\")\n",
+            crate::cuda::HOST_WARNINGS,
+            crate::builder::WARNINGS.join(";")
+        );
+    } else {
+        let _ = writeln!(
+            w,
+            "set(EASYPP_WARNINGS {})\n",
+            crate::builder::WARNINGS.join(" ")
+        );
+    }
     let _ = writeln!(
         w,
         "# Debug builds: AddressSanitizer and UBSan, as in easypp."
@@ -172,7 +215,7 @@ endif()
     let sanitize = "$<$<CONFIG:Debug>:-fsanitize=address,undefined;-fno-sanitize-recover=undefined;-fno-omit-frame-pointer>";
     let _ = writeln!(
         w,
-        "add_compile_options(\"{sanitize}\")\nadd_link_options(\"{sanitize}\")"
+        "add_compile_options(\"$<$<NOT:$<COMPILE_LANGUAGE:CUDA>>:{sanitize}>\")\nadd_link_options(\"{sanitize}\")"
     );
     let _ = writeln!(
         w,
@@ -424,6 +467,34 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
 
     let name = &target.name;
     let _ = writeln!(w, "add_executable({name} {})", list(sources));
+    if crate::cuda::contains_sources(
+        target.sources.iter().chain(
+            target
+                .libs
+                .iter()
+                .flat_map(|lib| &project.libs[lib].sources),
+        ),
+    ) {
+        let _ = writeln!(
+            w,
+            "set_target_properties({name} PROPERTIES LINKER_LANGUAGE CXX CUDA_RUNTIME_LIBRARY None)"
+        );
+    }
+    if let Some(module) = target.qt.qml.as_ref().and_then(|qml| qml.module.as_ref()) {
+        for dir in target.qt.qml_header_dirs() {
+            let _ = writeln!(
+                w,
+                "target_include_directories({name} PRIVATE \"{}\")",
+                dir.display()
+            );
+        }
+        let _ = writeln!(
+            w,
+            "qt6_add_qml_module({name} URI {} VERSION 1.0 RESOURCE_PREFIX /qt/qml NO_PLUGIN NO_GENERATE_QMLDIR NO_CACHEGEN TYPEINFO {} OUTPUT_DIRECTORY \"${{CMAKE_CURRENT_BINARY_DIR}}/easypp-qml/{name}\")",
+            module.uri,
+            crate::qt::QML_TYPEINFO
+        );
+    }
     let qml = target.qt.qml.iter().chain(
         target
             .libs

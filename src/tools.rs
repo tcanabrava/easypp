@@ -88,7 +88,10 @@ fn own_files(root: &Path, sources_only: bool) -> Vec<PathBuf> {
             }
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let source = Lang::of(&path).is_some();
-            let header = matches!(ext, "h" | "hh" | "hpp" | "hxx" | "inl" | "ipp" | "tpp");
+            let header = matches!(
+                ext,
+                "h" | "hh" | "hpp" | "hxx" | "inl" | "ipp" | "tpp" | "cuh"
+            );
             if source || (!sources_only && header) {
                 out.push(path.strip_prefix(root).unwrap_or(&path).to_path_buf());
             }
@@ -182,7 +185,8 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
     builder::generate(project, opts)?;
     builder::update_compile_commands(project, opts)?;
 
-    let files = own_files(&project.root, true);
+    let mut files = own_files(&project.root, true);
+    files.retain(|file| Lang::of(file) != Some(Lang::Cuda));
     let config = if project.root.join(".clang-tidy").exists() {
         None
     } else {
@@ -237,7 +241,96 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
             files.len()
         ));
     }
-    Ok(warnings == 0)
+    let qml_ok = lint_qml_modules(project, opts)?;
+    Ok(warnings == 0 && qml_ok)
+}
+
+fn lint_qml_modules(project: &Project, opts: &Options) -> Result<bool, String> {
+    let mut ok = true;
+    for target in project.bins.iter().chain(&project.tests) {
+        let Some(resources) = &target.qt.qml else {
+            continue;
+        };
+        let Some(module) = &resources.module else {
+            continue;
+        };
+        if !resources
+            .files
+            .iter()
+            .any(|path| path.extension().is_some_and(|ext| ext == "qml"))
+        {
+            continue;
+        }
+        let lint = project
+            .qt_tools
+            .as_ref()
+            .and_then(|tools| tools.qmllint.as_ref())
+            .ok_or("QML lint needs qmllint from Qt 6 declarative development tools")?;
+        let typeinfo = builder::qml_typeinfo_path(opts, target);
+        let staging = typeinfo.with_extension(format!("lint-{}", std::process::id()));
+        fs::create_dir(&staging)
+            .map_err(|e| format!("cannot create {}: {e}", staging.display()))?;
+        let module_dir = staging.join(module.uri.replace('.', "/"));
+        let result = (|| -> std::io::Result<_> {
+            fs::create_dir_all(&module_dir)?;
+            let mut qmldir = fs::read_to_string(&module.qmldir)?;
+            let typeinfo_name = crate::qt::QML_TYPEINFO;
+            if !qmldir.lines().any(|line| {
+                line.split_whitespace()
+                    .take(2)
+                    .eq(["typeinfo", typeinfo_name])
+            }) {
+                qmldir.push_str(&format!("\ntypeinfo {typeinfo_name}\n"));
+            }
+            fs::write(module_dir.join("qmldir"), qmldir)?;
+            fs::copy(&typeinfo, module_dir.join(typeinfo_name))?;
+            let mut files = Vec::new();
+            for file in resources
+                .files
+                .iter()
+                .filter(|file| **file != module.qmldir)
+            {
+                let copy = module_dir.join(file.strip_prefix(&resources.base).unwrap());
+                fs::create_dir_all(copy.parent().unwrap())?;
+                fs::copy(file, &copy)?;
+                if file.extension().is_some_and(|ext| ext == "qml") {
+                    files.push(copy);
+                }
+            }
+            ui::status("Linting", &format!("QML in {}", target.name));
+            Command::new(lint)
+                .current_dir(&project.root)
+                .args(["-E", "-W", "0", "-I"])
+                .arg(&staging)
+                .args(files)
+                .output()
+        })();
+        let _ = fs::remove_dir_all(staging);
+        let output = result.map_err(|e| format!("cannot lint QML in {}: {e}", target.name))?;
+        for bytes in [&output.stdout, &output.stderr] {
+            let messages = String::from_utf8_lossy(bytes);
+            let absolute_module = project.root.join(&module_dir);
+            let messages = messages.replace(
+                &*absolute_module.to_string_lossy(),
+                &resources.base.to_string_lossy(),
+            );
+            eprint!(
+                "{}",
+                messages.replace(
+                    &*module_dir.to_string_lossy(),
+                    &resources.base.to_string_lossy()
+                )
+            );
+        }
+        if !output.status.success() {
+            ui::warn(&format!(
+                "QML lint failed for {} ({})",
+                target.name, output.status
+            ));
+            ok = false;
+        }
+    }
+    Ok(ok)
 }
 
 #[cfg(test)]

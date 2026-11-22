@@ -27,15 +27,19 @@ pub enum SysDep {
     /// A pkg-config package, by `.pc` file name.
     Pkg(String),
     /// A plain `-l<name>`. `dir` is set when the linker does not search it by default.
-    Lib { name: String, dir: Option<PathBuf> },
+    Lib {
+        name: String,
+        dir: Option<PathBuf>,
+    },
     /// OpenMP: `-fopenmp` when compiling and linking. Found from `<omp.h>` or
     /// from any `#pragma omp` line, since pragmas need no header.
     OpenMp,
+    CudaRuntime,
 }
 
 /// Bump whenever the header-to-library rules change, so cached answers from
 /// older rules are thrown away (it is part of the fingerprint).
-const RULES_VERSION: u32 = 9; // 2: lib<prefix>_<module>; 3: Qt modules; 4: no Qt 5; 6: latest version
+const RULES_VERSION: u32 = 10; // 10: CUDA runtime header classification
 
 /// What `includes()` reports for a `#pragma omp` line.
 pub const OPENMP_PRAGMA: &str = "#pragma omp";
@@ -46,6 +50,7 @@ impl SysDep {
             SysDep::Pkg(name) if crate::conan::provides(name) => format!("{name} (Conan)"),
             SysDep::Pkg(name) => name.clone(),
             SysDep::OpenMp => "openmp".into(),
+            SysDep::CudaRuntime => "CUDA runtime".into(),
             SysDep::Lib { name, dir: None } => format!("-l{name}"),
             SysDep::Lib {
                 name,
@@ -303,6 +308,9 @@ impl System {
     }
 
     fn lookup(&self, include: &str) -> Option<SysDep> {
+        if matches!(include, "cuda_runtime.h" | "cuda_runtime_api.h") {
+            return Some(SysDep::CudaRuntime);
+        }
         // <omp.h> ships with the compiler, so it would otherwise count as a built-in.
         if include == "omp.h" || include == OPENMP_PRAGMA {
             return Some(SysDep::OpenMp);
@@ -465,7 +473,7 @@ impl System {
                     }
                 }
                 SysDep::OpenMp => push_unique(&mut out, "-fopenmp".into()),
-                SysDep::Lib { .. } => {}
+                SysDep::Lib { .. } | SysDep::CudaRuntime => {}
             }
         }
         // Qt is built with QT_REDUCE_RELOCATIONS: code using it must be -fPIC.
@@ -505,6 +513,7 @@ impl System {
                     all.push(format!("-l{name}"));
                 }
                 SysDep::OpenMp => all.push("-fopenmp".into()),
+                SysDep::CudaRuntime => {}
             }
         }
         dedup_link_flags(all)
@@ -745,7 +754,7 @@ pub fn in_path(program: &str) -> bool {
     find_in_path(program).is_some()
 }
 
-fn find_in_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(program: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
         .map(|dir| dir.join(program))

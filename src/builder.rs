@@ -155,6 +155,10 @@ fn target_key(target: &Target) -> String {
     format!("{sub}/{}", target.name)
 }
 
+pub(crate) fn qml_typeinfo_path(opts: &Options, target: &Target) -> PathBuf {
+    gen_dir(opts, &target_key(target)).join(qt::QML_TYPEINFO)
+}
+
 fn component(
     project: &Project,
     opts: &Options,
@@ -167,6 +171,18 @@ fn component(
     let mut cflags = system_cflags.to_vec();
     if !qt_files.is_empty() {
         cflags.push(format!("-I{}", gen_dir(opts, key).display()));
+    }
+    if qt_files
+        .qml
+        .as_ref()
+        .is_some_and(|qml| qml.module.is_some())
+    {
+        cflags.extend(
+            qt_files
+                .qml_header_dirs()
+                .iter()
+                .map(|dir| format!("-I{}", dir.display())),
+        );
     }
     // Headers of used libraries may include their ui_*.h.
     for lib in closure {
@@ -227,6 +243,17 @@ fn target_component(project: &Project, opts: &Options, target: &Target) -> Compo
 
 /// Builds every library plus the given executables.
 pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(), String> {
+    if let Some(cuda) = &project.cuda
+        && crate::cuda::contains_sources(
+            project
+                .libs
+                .values()
+                .flat_map(|lib| &lib.sources)
+                .chain(targets.iter().flat_map(|target| &target.sources)),
+        )
+    {
+        cuda.configure()?;
+    }
     let start = Instant::now();
     let libs = lib_components(project, opts);
     let programs: Vec<(&Target, Component)> = targets
@@ -330,14 +357,26 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         );
         objects.extend(standard_modules.iter().map(|path| object_path(opts, path)));
 
-        let any_cpp = own
+        let mut sources = own
             .sources
             .iter()
-            .chain(used.iter().flat_map(|l| l.sources.iter()))
-            .any(|s| Lang::of(s) == Some(Lang::Cpp));
+            .chain(used.iter().flat_map(|l| l.sources.iter()));
+        let any_cuda = target.system.contains(&crate::system::SysDep::CudaRuntime);
+        let any_cpp = any_cuda || sources.any(|s| Lang::of(s) == Some(Lang::Cpp));
         let mut cmd = vec![driver(if any_cpp { Lang::Cpp } else { Lang::C }).to_string()];
         cmd.extend(objects.iter().chain(&archives).map(|p| path_str(p)));
         cmd.extend(target.link_flags.iter().cloned());
+        if any_cuda {
+            let dir = &project.cuda.as_ref().expect("discovered CUDA toolkit").lib;
+            cmd.extend([
+                format!("-L{}", dir.display()),
+                "-lcudart".into(),
+                "-Xlinker".into(),
+                "-rpath".into(),
+                "-Xlinker".into(),
+                path_str(dir),
+            ]);
+        }
         if opts.sanitizers() {
             cmd.extend(SANITIZE.map(String::from));
         }
@@ -406,7 +445,14 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
                 expected.insert(bmi_path(opts, src));
             }
         }
-        for step in c.plan.ui.iter().chain(&c.plan.generate) {
+        for step in c
+            .plan
+            .ui
+            .iter()
+            .chain(&c.plan.generate)
+            .chain(&c.plan.qml_registration)
+            .chain(&c.plan.qml_resource)
+        {
             expected.insert(step.output.clone());
             expected.extend(step.additional_outputs.iter().cloned());
         }
@@ -500,6 +546,26 @@ fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result
     )?;
     run_jobs(
         jobs(plans.iter().flat_map(|p| &p.generate).collect()),
+        opts,
+        project,
+    )?;
+    run_jobs(
+        jobs(
+            plans
+                .iter()
+                .filter_map(|p| p.qml_registration.as_ref())
+                .collect(),
+        ),
+        opts,
+        project,
+    )?;
+    run_jobs(
+        jobs(
+            plans
+                .iter()
+                .filter_map(|p| p.qml_resource.as_ref())
+                .collect(),
+        ),
         opts,
         project,
     )
@@ -738,7 +804,10 @@ fn run_jobs(jobs: Vec<Job>, opts: &Options, project: &Project) -> Result<(), Str
 
                     let mut command = Command::new(&job.cmd[0]);
                     command.args(&job.cmd[1..]);
-                    if job.compiler && ui::color() {
+                    if job.compiler
+                        && ui::color()
+                        && matches!(job.cmd[0].as_str(), "clang" | "clang++")
+                    {
                         command.arg("-fcolor-diagnostics");
                     }
                     match command.output() {
@@ -770,7 +839,13 @@ fn run_jobs(jobs: Vec<Job>, opts: &Options, project: &Project) -> Result<(), Str
         return Err(e);
     }
     if compiling {
-        for hint in hints::compile(project, &failed_output.into_inner().unwrap()) {
+        let diagnostics = failed_output.into_inner().unwrap();
+        if project.cuda.is_some()
+            && let Some(hint) = crate::cuda::host_compiler_hint(&diagnostics)
+        {
+            ui::help(hint);
+        }
+        for hint in hints::compile(project, &diagnostics) {
             ui::help(&hint);
         }
     }
@@ -835,6 +910,7 @@ fn driver(lang: Lang) -> &'static str {
     match lang {
         Lang::C => "clang",
         Lang::Cpp => "clang++",
+        Lang::Cuda => "nvcc",
     }
 }
 
@@ -853,6 +929,13 @@ fn compile_flags(
     system_cflags: &[String],
 ) -> Vec<String> {
     let mut flags = source_flags(opts, src, &project.system_includes, system_cflags);
+    if Lang::of(src) == Some(Lang::Cuda) {
+        let cuda = project.cuda.as_ref().expect("discovered CUDA toolkit");
+        flags[0] = path_str(&cuda.nvcc);
+        if let Some(arch) = cuda.architecture().filter(|arch| *arch != "default") {
+            flags.push(format!("-arch={arch}"));
+        }
+    }
     if project.modules.is_standard_source(src) {
         flags.push("-w".into());
     }
@@ -877,10 +960,14 @@ pub(crate) fn source_flags(
         (Lang::Cpp, false) => CPP_STD,
         (Lang::C, true) => "-std=gnu17",
         (Lang::Cpp, true) => "-std=gnu++23",
+        (Lang::Cuda, _) => "-std=c++20",
     };
     let mut cmd: Vec<String> = vec![driver(lang).into(), std.into()];
     if third_party {
         cmd.push("-w".into());
+    } else if lang == Lang::Cuda {
+        // nvcc's generated host source uses GNU line markers.
+        cmd.push(crate::cuda::HOST_WARNINGS.into());
     } else {
         cmd.extend(WARNINGS.map(String::from));
     }
@@ -889,7 +976,9 @@ pub(crate) fn source_flags(
     } else {
         cmd.extend(["-O0".into(), "-g".into()]);
     }
-    if opts.sanitizers() {
+    if lang == Lang::Cuda {
+        cmd.push("--forward-unknown-to-host-compiler".into());
+    } else if opts.sanitizers() {
         cmd.extend(SANITIZE.map(String::from));
     }
     cmd.extend(base_includes());

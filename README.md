@@ -116,6 +116,13 @@ options or `easypp help deps add` for a nested command.
     Libraries use `qrc:/libs/<library>/` as their resource prefix. Use a
     `.qrc` for additional assets or custom aliases. CMake exports use the
     same resource URLs. See [the Qt QML example](examples/qt-qml).
+    For automatic C++ type registration, put a `module Your.Uri` declaration
+    in the executable's `qml/qmldir` and annotate C++ types in headers with
+    `QML_ELEMENT` or `QML_NAMED_ELEMENT`. easypp registers the module at version
+    1.0, embeds it under `qrc:/qt/qml/`, and runs `qmllint` for it through
+    `easypp lint`. See the [named module example](examples/qt-qml-module).
+    If a QML app fails to start because Qt reports a missing import,
+    `easypp run` names the module and explains how to make it available.
 
   Generated files go to `build/<profile>/gen/`, which is on the include path of
   the component and of everything that uses it. The tools are found through
@@ -217,3 +224,37 @@ nlohmann/json, and GoogleTest in one project.
 ```sh
 cargo install --path .
 ```
+
+Run `cargo test` from the repository root after installing the dependencies
+listed in the [CI workflow](.github/workflows/ci.yml). The test suite
+copies every project under `examples/` into a temporary directory, builds it
+from scratch, and runs its tests. The Conan example installs the dependencies
+recorded in its manifest, so a fresh Conan cache may need network access.
+Use `cargo test -- --include-ignored` to also run the focused integration
+tests that require additional tools.
+
+## CUDA
+
+With the NVIDIA CUDA Toolkit and its supported host compiler installed, put
+`nvcc` on `PATH`. easypp compiles `.cu` files as CUDA C++20. They can be
+executables, tests, or part of a library under `src/libs/`. An executable that
+uses one of these libraries links the CUDA runtime automatically. C and C++
+files still compile with Clang and retain their Debug sanitizers.
+
+On the first CUDA build, easypp asks for an architecture. The suggested value
+uses the first visible NVIDIA GPU's compute capability and the targets that
+`nvcc` supports. A noninteractive build accepts the recommendation
+automatically. When GPU detection is unavailable, the initial choice is nvcc's
+default architecture. The project database remembers the choice across
+profiles and `--no-cache` builds. See it with `easypp info`; CMake exports
+carry over a selected architecture. `easypp clean` removes the saved choice.
+
+Keep a kernel and the device functions it calls in the same translation unit.
+
+The [CUDA smoke project](tests/fixtures/cuda) builds without a GPU. Its
+`--gpu` argument launches a kernel and checks the result on a machine with
+a working NVIDIA driver. The CUDA smoke test runs with `cargo test` when
+`nvcc` is on `PATH`, and checks CMake export when CMake and Ninja are installed.
+
+The [CUDA, GTK 4, and OpenMP Game of Life](examples/life-cuda) combines a GPU
+simulation with a desktop interface and a headless CPU comparison.

@@ -2,8 +2,8 @@
 //! drives the real `easypp` binary. They need clang (with its sanitizer
 //! runtimes); `export_cmake_builds` also needs cmake and ninja.
 //!
-//! `cargo test -- --ignored` also builds and tests the examples, which need
-//! SDL2, GTK4, OpenMP, Boost and Qt 6.
+//! `cargo test` also builds and tests every example.
+//! See the CI workflow for the additional dependencies.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,8 +15,7 @@ struct Project {
 }
 
 impl Project {
-    /// `easypp new` in a fresh temporary folder.
-    fn new(test: &str) -> Project {
+    fn temporary(test: &str) -> Project {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let parent = std::env::temp_dir().join(format!(
             "easypp-it-{}-{}-{}",
@@ -25,16 +24,46 @@ impl Project {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&parent).unwrap();
-        let out = Command::new(easypp())
-            .arg("new")
-            .arg("p")
-            .current_dir(&parent)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "easypp new failed: {}", text(&out));
         Project {
             dir: parent.join("p"),
         }
+    }
+
+    /// `easypp new` in a fresh temporary folder.
+    fn new(test: &str) -> Project {
+        let project = Self::temporary(test);
+        let out = Command::new(easypp())
+            .arg("new")
+            .arg("p")
+            .current_dir(project.dir.parent().unwrap())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "easypp new failed: {}", text(&out));
+        project
+    }
+
+    fn copy_example(example: &Path) -> Project {
+        let project = Self::temporary(&example.file_name().unwrap().to_string_lossy());
+        fs::create_dir(&project.dir).unwrap();
+        let mut copy = Command::new("cp");
+        copy.arg("-a");
+        for entry in fs::read_dir(example).unwrap() {
+            let entry = entry.unwrap();
+            if !matches!(
+                entry.file_name().to_str(),
+                Some("build" | "compile_commands.json" | "build-cmake")
+            ) {
+                copy.arg(entry.path());
+            }
+        }
+        let out = copy.arg(&project.dir).output().unwrap();
+        assert!(
+            out.status.success(),
+            "copy {}: {}",
+            example.display(),
+            text(&out)
+        );
+        project
     }
 
     fn write(&self, path: &str, content: &str) -> &Self {
@@ -293,66 +322,208 @@ fn export_cmake_builds() {
     assert!(out.status.success(), "{}", text(&out));
 }
 
-/// Needs SDL2, GTK4, OpenMP, Boost and Qt 6: `cargo test -- --ignored`.
-/// The examples are what students read, so they must also be formatted and
-/// lint-clean.
 #[test]
-#[ignore]
 fn examples_build_and_pass_their_tests() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    let mut commands = vec![vec!["test"]];
-    if have("clang-format") {
-        commands.push(vec!["fmt", "--check"]);
-    }
-    if have("clang-tidy") {
-        commands.push(vec!["lint"]);
-    }
-    for example in ["blockfall", "life", "asio-kv", "qt-tasks"] {
+    let mut examples: Vec<_> = fs::read_dir(examples)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.join("src").is_dir())
+        .collect();
+    examples.sort();
+    assert!(!examples.is_empty());
+    let mut failures = Vec::new();
+    for example in examples {
+        let name = example.file_name().unwrap().to_string_lossy();
+        eprintln!("Checking example {name}");
+        let project = Project::copy_example(&example);
+        let mut commands = vec![vec!["build", "-j4"], vec!["test", "-j4"]];
+        if project.exists("conanfile.txt") {
+            for args in &mut commands {
+                args.push("--release");
+            }
+        }
+        if matches!(name.as_ref(), "blockfall" | "life" | "asio-kv" | "qt-tasks") {
+            if have("clang-format") {
+                commands.push(vec!["fmt", "--check"]);
+            }
+            if have("clang-tidy") {
+                commands.push(vec!["lint", "-j4"]);
+            }
+        }
         for args in &commands {
-            let out = Command::new(easypp())
+            let out = project.run(args);
+            if !out.status.success() {
+                failures.push(format!("{name}: easypp {args:?}\n{}", text(&out)));
+                break;
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn cuda_setup_errors_explain_how_to_fix_the_toolchain() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let p = Project::new("cuda-setup");
+    p.remove("src");
+    p.write("src/bin/demo.cu", "int main() { return 0; }\n");
+    fs::create_dir_all(p.dir.join("toolkit/bin")).unwrap();
+    let build = || {
+        let out = Command::new(easypp())
+            .args(["build", "--release"])
+            .current_dir(&p.dir)
+            .env("PATH", p.dir.join("toolkit/bin"))
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{}", text(&out));
+        text(&out)
+    };
+    let missing = build();
+    assert!(
+        missing.contains("Install the toolkit or add its bin directory to PATH"),
+        "{missing}"
+    );
+    p.write(
+        "toolkit/bin/nvcc",
+        r#"#!/bin/sh
+if [ "$1" = --list-gpu-code ]; then
+  printf 'sm_75\n'
+  exit 0
+fi
+printf 'crt/host_config.h:42: error: #error -- unsupported GNU version!\n' >&2
+exit 1
+"#,
+    );
+    fs::set_permissions(
+        p.dir.join("toolkit/bin/nvcc"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let incomplete = build();
+    assert!(
+        incomplete.contains("missing cuda_runtime.h")
+            && incomplete.contains("CUDA development files"),
+        "{incomplete}"
+    );
+    p.write("toolkit/include/cuda_runtime.h", "");
+    let incomplete = build();
+    assert!(
+        incomplete.contains("missing libcudart.so")
+            && incomplete.contains("CUDA development files"),
+        "{incomplete}"
+    );
+    p.write("toolkit/lib64/libcudart.so", "");
+    let unsupported = build();
+    assert!(
+        unsupported.contains("unsupported GNU version"),
+        "{unsupported}"
+    );
+    assert!(unsupported.contains("set NVCC_CCBIN"), "{unsupported}");
+}
+
+#[test]
+fn cuda_builds_a_library_and_rebuilds_when_a_header_changes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !have("nvcc") {
+        eprintln!("Skipping CUDA smoke test: nvcc is not on PATH");
+        return;
+    }
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cuda");
+    let p = Project::copy_example(&fixture);
+    assert!(p.ok(&["info"]).contains("choose on first CUDA build"));
+    let output = Command::new("nvcc")
+        .arg("--list-gpu-code")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let capability: u16 = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter_map(|code| code.strip_prefix("sm_")?.parse().ok())
+        .min()
+        .unwrap();
+    let architecture = format!("sm_{capability}");
+    p.write(
+        "tools/nvidia-smi",
+        &format!(
+            "#!/bin/sh\nprintf 'Fixture GPU, {}.{}\\n'\n",
+            capability / 10,
+            capability % 10
+        ),
+    );
+    fs::set_permissions(
+        p.dir.join("tools/nvidia-smi"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(p.dir.join("tools"))
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let first = Command::new(easypp())
+        .args(["run", "-j4", "-v"])
+        .current_dir(&p.dir)
+        .env("PATH", path)
+        .env_remove("CUDA_VISIBLE_DEVICES")
+        .output()
+        .unwrap();
+    assert!(first.status.success(), "{}", text(&first));
+    let first = text(&first);
+    assert!(first.contains("CUDA runtime"), "{first}");
+    assert!(first.contains(&format!("-arch={architecture}")), "{first}");
+    assert!(
+        p.ok(&["info", "--no-cache"])
+            .contains(&format!("CUDA architecture: {architecture}"))
+    );
+    assert!(!p.ok(&["build", "-j4"]).contains("Compiling"));
+    p.write(
+        "src/libs/device/answer.cuh",
+        "#pragma once\nconstexpr int answer = 40 + 2;\n",
+    );
+    let rebuilt = p.ok(&["run", "-j4"]);
+    assert!(rebuilt.contains("Compiling src/libs/device/device.cu"));
+    assert!(rebuilt.contains("CUDA runtime"));
+    if have("cmake") && have("ninja") {
+        p.ok(&["export-cmake"]);
+        let cmake = fs::read_to_string(p.dir.join("CMakeLists.txt")).unwrap();
+        assert!(cmake.contains(&format!("CMAKE_CUDA_ARCHITECTURES {capability}")));
+        for args in [
+            &["-S", ".", "-B", "build-cmake", "-G", "Ninja"][..],
+            &["--build", "build-cmake", "-j4"],
+        ] {
+            let out = Command::new("cmake")
                 .args(args)
-                .current_dir(examples.join(example))
+                .current_dir(&p.dir)
+                .env("CC", "clang")
+                .env("CXX", "clang++")
                 .output()
                 .unwrap();
-            assert!(
-                out.status.success(),
-                "{example}: easypp {args:?}\n{}",
-                text(&out)
-            );
+            assert!(out.status.success(), "cmake {args:?}:\n{}", text(&out));
         }
+        let out = Command::new(p.dir.join("build-cmake/demo"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success() && text(&out).contains("CUDA runtime"),
+            "{}",
+            text(&out)
+        );
     }
 }
 
-/// Build the actual executables with no generated files or discovery cache.
 #[test]
-#[ignore = "requires Qt 6, KDE Frameworks 6 and GTK 4 VTE development packages"]
-fn desktop_examples_build_from_source() {
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    for (example, executable) in [
-        ("qt-tasks", "tasks"),
-        ("kmines", "kmines"),
-        ("vte", "vte-demo"),
-    ] {
-        let p = Project::new(example);
-        p.remove("src");
-        let status = Command::new("cp")
-            .arg("-R")
-            .arg(examples.join(example).join("src"))
-            .arg(&p.dir)
-            .status()
-            .unwrap();
-        assert!(status.success(), "copy sources for {example}");
-        if example == "qt-tasks" {
-            let form = "src/libs/window/mainwindow.ui";
-            let text = fs::read_to_string(p.dir.join(form)).unwrap();
-            p.write(form, &text.replace("<ui version", "<ui\n version"));
-        }
-        p.ok(&["build", "-j", "4"]);
-        assert!(p.exists(&format!("build/debug/bin/{executable}")));
-        if example == "qt-tasks" {
-            p.ok(&["test", "-j", "4"]);
-        }
-    }
+#[ignore = "requires Qt 6 base development tools"]
+fn qt_designer_form_with_multiline_root_builds() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/qt-tasks");
+    let p = Project::copy_example(&example);
+    let form = "src/libs/window/mainwindow.ui";
+    let text = fs::read_to_string(p.dir.join(form)).unwrap();
+    p.write(form, &text.replace("<ui version", "<ui\n version"));
+    p.ok(&["build", "-j4"]);
+    assert!(p.exists("build/debug/bin/tasks"));
 }
 
 #[test]
@@ -439,6 +610,100 @@ fn qt_qml_resources_build_and_regenerate() {
         run(Path::new("cmake"), &["--build", "build-cmake"]);
         run(Path::new("./build-cmake/qml-counter"), &["--check"]);
     }
+}
+
+#[test]
+#[ignore = "requires Qt 6 declarative tools, Qt Quick, and clang-tidy"]
+fn qt_qml_named_module_registers_and_lints_cpp_types() {
+    let p = Project::new("qt-qml-module");
+    p.remove("src");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/qt-qml-module/src");
+    assert!(
+        Command::new("cp")
+            .arg("-R")
+            .arg(example)
+            .arg(&p.dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let run = |command: &Path, args: &[&str]| {
+        let out = Command::new(command)
+            .args(args)
+            .current_dir(&p.dir)
+            .env("QT_QPA_PLATFORM", "offscreen")
+            .env("CC", "clang")
+            .env("CXX", "clang++")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{command:?} {args:?}:\n{}",
+            text(&out)
+        );
+        text(&out)
+    };
+    let easypp = Path::new(easypp());
+    let build = || run(easypp, &["run", "--release", "--", "--check"]);
+    assert!(build().contains("qmltyperegistrar"));
+    assert!(!build().contains("Generating"));
+    let header = "src/bin/qml-counter/Counter.hpp";
+    let contents = fs::read_to_string(p.dir.join(header)).unwrap();
+    p.write(
+        header,
+        &contents.replace("QML_ELEMENT", "QML_NAMED_ELEMENT(Counter)"),
+    );
+    assert!(build().contains("qmltyperegistrar"));
+    assert!(run(easypp, &["lint", "--release"]).contains("QML in qml-counter"));
+    if have("cmake") && have("ninja") {
+        p.ok(&["export-cmake"]);
+        run(
+            Path::new("cmake"),
+            &[
+                "-S",
+                ".",
+                "-B",
+                "build-cmake",
+                "-G",
+                "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release",
+            ],
+        );
+        run(Path::new("cmake"), &["--build", "build-cmake"]);
+        run(Path::new("./build-cmake/qml-counter"), &["--check"]);
+    }
+    let main = "src/bin/qml-counter/qml/Main.qml";
+    let contents = fs::read_to_string(p.dir.join(main)).unwrap();
+    p.write(
+        main,
+        &contents.replace("counter.value", "counter.missingProperty"),
+    );
+    let diagnostics = p.fails(&["lint", "--release"]);
+    assert!(
+        diagnostics.contains("src/bin/qml-counter/qml/Main.qml"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("missingProperty"), "{diagnostics}");
+
+    p.write(main, &format!("import Easypp.Fixture.Missing\n{contents}"));
+    let out = Command::new(easypp)
+        .args(["run", "--release", "--", "--check"])
+        .current_dir(&p.dir)
+        .env("QT_QPA_PLATFORM", "offscreen")
+        .env_remove("QT_FORCE_STDERR_LOGGING")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let diagnostics = text(&out);
+    assert!(
+        diagnostics.contains("module \"Easypp.Fixture.Missing\" is not installed"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("QML module 'Easypp.Fixture.Missing' was unavailable at runtime"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("QML_IMPORT_PATH"), "{diagnostics}");
 }
 
 /// Exercises real KConfig output, including its generated Q_OBJECT class,

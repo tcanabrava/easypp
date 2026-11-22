@@ -1,0 +1,4 @@
+module Easypp.Counter
+typeinfo easypp.qmltypes
+Main 1.0 Main.qml
+CounterLabel 1.0 CounterLabel.qml

@@ -108,6 +108,9 @@ impl Modules {
 
     pub fn resolve_header(&self, mut command: Vec<String>, name: &str) -> Option<PathBuf> {
         command.extend([
+            // The driver lists sanitizer ignorelists before the primary input.
+            // Suppress them only in this lookup, not when compiling the PCM.
+            "-fno-sanitize-ignorelist".into(),
             "-M".into(),
             "-MT".into(),
             "header".into(),

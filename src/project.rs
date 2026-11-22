@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 pub enum Lang {
     C,
     Cpp,
+    Cuda,
 }
 
 impl Lang {
@@ -32,6 +33,7 @@ impl Lang {
     pub fn of(path: &Path) -> Option<Lang> {
         match path.extension()?.to_str()? {
             "c" => Some(Lang::C),
+            "cu" => Some(Lang::Cuda),
             "cpp" | "cc" | "cxx" | "c++" | "cppm" | "ixx" | "ccm" | "cxxm" => Some(Lang::Cpp),
             _ => None,
         }
@@ -91,6 +93,7 @@ pub struct Target {
 
 #[derive(Debug)]
 pub struct Project {
+    pub cuda: Option<crate::cuda::Toolkit>,
     pub root: PathBuf,
     pub libs: BTreeMap<String, Library>,
     /// Library names with dependencies before dependents (build order).
@@ -105,8 +108,8 @@ pub struct Project {
 }
 
 pub const LIBS_DIR: &str = "src/libs";
-const BIN_DIR: &str = "src/bin";
-const TESTS_DIR: &str = "src/tests";
+pub(crate) const BIN_DIR: &str = "src/bin";
+pub(crate) const TESTS_DIR: &str = "src/tests";
 const THIRDPARTY_DIR: &str = "src/thirdparty";
 
 /// Walks up from `start` to the first folder that looks like a project.
@@ -297,7 +300,10 @@ pub fn discover(
             .iter()
             .filter_map(|i| system.resolve(i))
             .collect();
-        lib.qt = QtFiles::from_files(&lib.dir, &files, scan.moc);
+        if crate::cuda::contains_sources(&lib.sources) {
+            lib.system.insert(SysDep::CudaRuntime);
+        }
+        lib.qt = QtFiles::from_files(&lib.dir, &files, scan.moc)?;
         lib.system.extend(resource_dep(&lib.qt, &system)?);
         lib.system.extend(qml_dep(&lib.qt, &system)?);
         if !lib.qt.kconfig.is_empty() {
@@ -369,8 +375,35 @@ pub fn discover(
             })?)
         }
     };
+    if needs_qt
+        .iter()
+        .any(|(_, files)| files.qml.as_ref().is_some_and(|qml| qml.module.is_some()))
+        && qt_tools
+            .as_ref()
+            .is_none_or(|tools| tools.qmltyperegistrar.is_none())
+    {
+        return Err(
+            "Named QML modules need qmltyperegistrar from Qt 6 declarative development tools"
+                .into(),
+        );
+    }
 
+    let cuda = (libs
+        .values()
+        .any(|lib| lib.system.contains(&SysDep::CudaRuntime))
+        || bins
+            .iter()
+            .chain(&tests)
+            .any(|target| target.system.contains(&SysDep::CudaRuntime)))
+    .then(crate::cuda::Toolkit::discover)
+    .transpose()?;
+    if let Some(cuda) = &cuda
+        && !system_includes.contains(&cuda.include)
+    {
+        system_includes.push(cuda.include.clone());
+    }
     Ok(Project {
+        cuda,
         root: root.to_path_buf(),
         libs,
         lib_order,
@@ -454,7 +487,7 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
         dependencies.extend(ctx.modules.libraries(&sources, None)?);
         let libs = link_order(&dependencies, ctx.libs, ctx.lib_order);
         // A folder target owns its .ui/.qrc files; a single-file target has none.
-        let qt = QtFiles::from_files(&entry, if entry.is_dir() { &files } else { &[] }, scan.moc);
+        let qt = QtFiles::from_files(&entry, if entry.is_dir() { &files } else { &[] }, scan.moc)?;
 
         let mut system: Vec<SysDep> = Vec::new();
         let own = scan.external.iter().filter_map(|i| ctx.system.resolve(i));
@@ -485,6 +518,9 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
             && !system.contains(&dep)
         {
             system.push(dep);
+        }
+        if crate::cuda::contains_sources(&sources) && !system.contains(&SysDep::CudaRuntime) {
+            system.push(SysDep::CudaRuntime);
         }
         let cflags = ctx.system.compile_flags(&system.iter().cloned().collect());
         let link_flags = ctx.system.link_flags(&system);

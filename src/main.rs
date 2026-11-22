@@ -3,6 +3,7 @@ mod cache;
 mod cli;
 mod conan;
 mod cond;
+mod cuda;
 mod export;
 mod hints;
 mod kde;
@@ -162,6 +163,14 @@ pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Pro
         None
     };
     let project = project::discover(root, opts, cache.as_mut())?;
+    if let Some(cuda) = &project.cuda {
+        if let Some(cache) = &cache {
+            cuda.restore(cache)?;
+        } else if !opts.cache && Path::new(builder::BUILD_DIR).join("easypp.db").is_file() {
+            let database = cache::Cache::open(Path::new(builder::BUILD_DIR))?;
+            cuda.restore(&database)?;
+        }
+    }
     if opts.verbose {
         match &cache {
             Some(c) if c.redetected() => {
@@ -282,11 +291,17 @@ fn run_bin(
     );
     let mut command = Command::new(&exe);
     runtime_data(&mut command, project);
-    let status = command
-        .args(&args.args)
-        .current_dir(invoked_from)
-        .status()
-        .map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
+    command.args(&args.args).current_dir(invoked_from);
+    let qml = target.system.iter().any(|dep| {
+        matches!(dep, system::SysDep::Pkg(name)
+            if name.starts_with("Qt6Qml") || name.starts_with("Qt6Quick"))
+    });
+    let status = if qml {
+        qt::run_qml(&mut command)
+    } else {
+        command.status()
+    }
+    .map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
     Ok(exit_code(status))
 }
 
@@ -343,6 +358,12 @@ fn print_info(project: &Project) {
         }
     };
     println!("project: {}\n", project.root.display());
+    if let Some(cuda) = &project.cuda {
+        println!(
+            "CUDA architecture: {}\n",
+            cuda.architecture().unwrap_or("choose on first CUDA build")
+        );
+    }
 
     println!("libraries (build order):");
     if project.lib_order.is_empty() {

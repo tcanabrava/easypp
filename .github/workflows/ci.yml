@@ -14,9 +14,11 @@ jobs:
       - name: Install toolchain and example dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            git rust clang lld lldb openmp pkgconf cmake ninja \
+            git rust clang gcc lld lldb openmp pkgconf cmake ninja cuda \
             zlib sdl2-compat gtk4 boost qt6-base qt6-declarative gtest catch2 \
-            libkdegames kcrash kdbusaddons kiconthemes vte4 fmt pcre2
+            libkdegames kcrash kdbusaddons kiconthemes vte4 fmt pcre2 python-pipx
+          /opt/cuda/bin/nvcc --version
+          echo /opt/cuda/bin >> "$GITHUB_PATH"
 
       - uses: actions/checkout@v4
 
@@ -26,8 +28,5 @@ jobs:
       - name: Lints
         run: cargo clippy --release --all-targets -- -D warnings
 
-      - name: Unit and integration tests
-        run: cargo test --release
-
-      - name: Examples (SDL2, GTK4 + OpenMP, Boost, Qt 6, KDE)
-        run: cargo test --release -- --ignored
+      - name: Unit, integration, and clean example builds
+        run: cargo test --release -- --include-ignored

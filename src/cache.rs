@@ -13,8 +13,8 @@
 //!
 //! The first build of a project pays for detection and for writing the
 //! database; later builds read it back in one pass. The cache is an
-//! optimisation only: if it cannot be opened, easypp works without it, and
-//! `easypp clean` deletes it along with the rest of `build/`.
+//! optimisation for discovery. The database also holds the CUDA architecture
+//! chosen on the first build. `easypp clean` removes the database.
 
 use crate::system::{Flags, Package, Snapshot, SysDep, System};
 use std::collections::{HashMap, HashSet};
@@ -45,14 +45,7 @@ CREATE TABLE IF NOT EXISTS sources (
     path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL, includes TEXT NOT NULL);
 ";
 
-const TABLES: &[&str] = &[
-    "meta",
-    "toolchain",
-    "packages",
-    "headers",
-    "pkg_flags",
-    "sources",
-];
+const TABLES: &[&str] = &["toolchain", "packages", "headers", "pkg_flags", "sources"];
 
 /// Runs a future to completion on this thread. Turso's local I/O is
 /// synchronous: a pending poll has already done its I/O step, so polling
@@ -204,7 +197,7 @@ impl Cache {
             self.exec(&drops)?;
             self.exec(SCHEMA)?;
             self.exec(&format!(
-                "INSERT INTO meta (key, value) VALUES ('schema', '{SCHEMA_VERSION}')"
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', '{SCHEMA_VERSION}')"
             ))?;
             return Ok(());
         }
@@ -240,6 +233,7 @@ impl Cache {
             let dep = match (text(&r[1]).as_str(), &r[3]) {
                 ("pkg", _) => Some(SysDep::Pkg(text(&r[2]))),
                 ("openmp", _) => Some(SysDep::OpenMp),
+                ("cudart", _) => Some(SysDep::CudaRuntime),
                 ("lib", Value::Null) => Some(SysDep::Lib {
                     name: text(&r[2]),
                     dir: None,
@@ -261,6 +255,20 @@ impl Cache {
                 .insert(text(&r[0]), (int(&r[1]), int(&r[2]), list(&r[3])));
         }
         Ok(())
+    }
+
+    pub fn cuda_architecture(&self) -> Result<Option<String>, String> {
+        Ok(self
+            .rows("SELECT value FROM meta WHERE key = 'cuda_architecture'")?
+            .first()
+            .map(|row| text(&row[0])))
+    }
+
+    pub fn save_cuda_architecture(&self, architecture: &str) -> Result<(), String> {
+        self.exec(&format!(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('cuda_architecture', {})",
+            quote(architecture)
+        ))
     }
 
     /// True if this run had to ask the compiler and pkg-config again.
@@ -343,6 +351,7 @@ impl Cache {
                 None => ("NULL".to_string(), "NULL".to_string(), "NULL".to_string()),
                 Some(SysDep::Pkg(name)) => (quote("pkg"), quote(name), "NULL".into()),
                 Some(SysDep::OpenMp) => (quote("openmp"), "NULL".into(), "NULL".into()),
+                Some(SysDep::CudaRuntime) => (quote("cudart"), "NULL".into(), "NULL".into()),
                 Some(SysDep::Lib { name, dir }) => (
                     quote("lib"),
                     quote(name),
