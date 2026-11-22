@@ -410,6 +410,9 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
             expected.insert(step.output.clone());
             expected.extend(step.additional_outputs.iter().cloned());
         }
+        if let Some((manifest, _)) = &c.plan.qml_manifest {
+            expected.insert(manifest.clone());
+        }
     }
     for (name, lib) in libs {
         if !lib.sources.is_empty() {
@@ -465,6 +468,15 @@ fn prune_dir(dir: &Path, expected: &HashSet<PathBuf>) -> usize {
 /// Runs moc, uic and rcc where their outputs are stale: uic first (sources and
 /// moc may include its headers), then moc and rcc.
 fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result<(), String> {
+    for (path, contents) in plans.iter().filter_map(|plan| plan.qml_manifest.as_ref()) {
+        if fs::read_to_string(path).ok().as_ref() != Some(contents) {
+            fs::create_dir_all(path.parent().unwrap())
+                .and_then(|_| fs::write(path, contents))
+                .map_err(|e| {
+                    format!("cannot write QML resource manifest {}: {e}", path.display())
+                })?;
+        }
+    }
     let jobs = |steps: Vec<&qt::Step>| -> Vec<Job> {
         steps
             .into_iter()

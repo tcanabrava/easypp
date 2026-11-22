@@ -13,8 +13,10 @@
 //! include path of that component and of everything that uses it.
 
 use crate::system::SysDep;
+use quick_xml::escape::escape;
 use quick_xml::{Reader, events::Event};
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -37,12 +39,20 @@ pub struct QtFiles {
     pub moc: Vec<PathBuf>,
     pub ui: Vec<PathBuf>,
     pub qrc: Vec<PathBuf>,
+    pub qml: Option<QmlResources>,
     pub kconfig: Vec<PathBuf>,
     pub gresource: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+pub struct QmlResources {
+    pub base: PathBuf,
+    pub prefix: String,
+    pub files: Vec<PathBuf>,
+}
+
 impl QtFiles {
-    pub fn from_files(files: &[PathBuf], moc: Vec<PathBuf>) -> QtFiles {
+    pub fn from_files(base: &Path, files: &[PathBuf], moc: Vec<PathBuf>) -> QtFiles {
         let with_ext = |ext: &str| -> Vec<PathBuf> {
             files
                 .iter()
@@ -50,10 +60,42 @@ impl QtFiles {
                 .cloned()
                 .collect()
         };
+        let qrc = with_ext("qrc");
+        let qml = if !base.starts_with("src/thirdparty") && !with_ext("qml").is_empty() {
+            let explicit: HashSet<_> = qrc
+                .iter()
+                .flat_map(|path| resource_files(path))
+                .filter_map(|path| path.canonicalize().ok())
+                .collect();
+            let files: Vec<_> = files
+                .iter()
+                .filter(|path| {
+                    (matches!(
+                        path.extension().and_then(|e| e.to_str()),
+                        Some("qml" | "js" | "mjs")
+                    ) || path.file_name().is_some_and(|name| name == "qmldir"))
+                        && (explicit.is_empty()
+                            || !path
+                                .canonicalize()
+                                .is_ok_and(|path| explicit.contains(&path)))
+                })
+                .cloned()
+                .collect();
+            (!files.is_empty()).then(|| QmlResources {
+                base: base.to_path_buf(),
+                prefix: base
+                    .strip_prefix(crate::project::LIBS_DIR)
+                    .map_or_else(|_| "/".into(), |lib| format!("/libs/{}", lib.display())),
+                files,
+            })
+        } else {
+            None
+        };
         QtFiles {
             moc,
             ui: with_ext("ui").into_iter().filter(|p| is_qt_ui(p)).collect(),
-            qrc: with_ext("qrc"),
+            qrc,
+            qml,
             kconfig: with_ext("kcfgc"),
             gresource: files
                 .iter()
@@ -67,6 +109,7 @@ impl QtFiles {
         !(self.moc.is_empty()
             && self.ui.is_empty()
             && self.qrc.is_empty()
+            && self.qml.is_none()
             && self.kconfig.is_empty())
     }
 
@@ -90,6 +133,9 @@ impl QtFiles {
                     .collect();
                 parts.push(format!("{tool} {}", names.join(" ")));
             }
+        }
+        if let Some(qml) = &self.qml {
+            parts.push(format!("qml: {} files", qml.files.len()));
         }
         parts.join("; ")
     }
@@ -187,6 +233,7 @@ pub struct Plan {
     pub sources: Vec<PathBuf>,
     /// Generated resource sources (qrc_*.cpp), linked directly into programs.
     pub resources: Vec<PathBuf>,
+    pub qml_manifest: Option<(PathBuf, String)>,
 }
 
 /// Plans the generated files of a component. `moc_flags` are the component's
@@ -298,6 +345,53 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
             output,
         });
     }
+    if let Some(qml) = &files.qml {
+        let manifest = unique("easypp_qml".into(), ".qrc");
+        let output = unique("qrc_easypp_qml".into(), ".cpp");
+        let name = format!(
+            "easypp_qml_{}",
+            gen_dir
+                .to_string_lossy()
+                .as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        let mut contents = format!("<RCC><qresource prefix=\"{}\">\n", escape(&qml.prefix));
+        let back_to_root = "../".repeat(gen_dir.components().count());
+        for file in &qml.files {
+            let alias = s(file
+                .strip_prefix(&qml.base)
+                .expect("QML file under component"));
+            let source = format!("{back_to_root}{}", s(file));
+            let _ = writeln!(
+                contents,
+                "  <file alias=\"{}\">{}</file>",
+                escape(&alias),
+                escape(&source)
+            );
+        }
+        contents.push_str("</qresource></RCC>\n");
+        plan.qml_manifest = Some((manifest.clone(), contents));
+        plan.resources.push(output.clone());
+        plan.generate.push(Step {
+            tool: "rcc (QML)",
+            inputs: std::iter::once(manifest.clone())
+                .chain(qml.files.iter().cloned())
+                .collect(),
+            cmd: vec![
+                s(&tools.rcc),
+                "--name".into(),
+                name,
+                s(&manifest),
+                "-o".into(),
+                s(&output),
+            ],
+            input: manifest,
+            output,
+            additional_outputs: vec![],
+        });
+    }
     plan
 }
 
@@ -389,8 +483,10 @@ fn resource_files(qrc: &Path) -> Vec<PathBuf> {
         let Some(close) = rest.find("</file>") else {
             break;
         };
-        if open_end < close {
-            out.push(base.join(rest[open_end + 1..close].trim()));
+        if open_end < close
+            && let Ok(path) = quick_xml::escape::unescape(rest[open_end + 1..close].trim())
+        {
+            out.push(base.join(path.as_ref()));
         }
         rest = &rest[close + "</file>".len()..];
     }
@@ -426,6 +522,7 @@ mod tests {
             ],
             ui: vec!["a/window.ui".into()],
             qrc: vec![],
+            qml: None,
             kconfig: vec![],
             gresource: vec![],
         };

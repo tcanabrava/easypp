@@ -109,6 +109,13 @@ options or `easypp help deps add` for a nested command.
   - **rcc**: `res.qrc` gives `qrc_res.cpp`. For a library, the resources are
     linked straight into each program that uses it (in a static archive they
     would be dropped), and editing a file the `.qrc` lists regenerates it.
+  - **QML**: a C++ executable directory containing `.qml` files gets an
+    automatic resource bundle. For example, `src/bin/app/qml/Main.qml` is
+    available at `qrc:/qml/Main.qml` to `QQmlApplicationEngine`. The bundle
+    preserves relative paths and includes `.js`, `.mjs`, and `qmldir` files.
+    Libraries use `qrc:/libs/<library>/` as their resource prefix. Use a
+    `.qrc` for additional assets or custom aliases. CMake exports use the
+    same resource URLs. See [the Qt QML example](examples/qt-qml).
 
   Generated files go to `build/<profile>/gen/`, which is on the include path of
   the component and of everything that uses it. The tools are found through

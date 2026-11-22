@@ -15,7 +15,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed \
             git rust clang lld lldb openmp pkgconf cmake ninja \
-            zlib sdl2-compat gtk4 boost qt6-base gtest catch2 \
+            zlib sdl2-compat gtk4 boost qt6-base qt6-declarative gtest catch2 \
             libkdegames kcrash kdbusaddons kiconthemes vte4 fmt pcre2
 
       - uses: actions/checkout@v4

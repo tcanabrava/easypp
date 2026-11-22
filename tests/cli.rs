@@ -355,6 +355,92 @@ fn desktop_examples_build_from_source() {
     }
 }
 
+#[test]
+#[ignore = "requires Qt 6 declarative development tools and Qt Quick runtime modules"]
+fn qt_qml_resources_build_and_regenerate() {
+    let p = Project::new("qt-qml");
+    p.remove("src");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/qt-qml/src");
+    assert!(
+        Command::new("cp")
+            .arg("-R")
+            .arg(example)
+            .arg(&p.dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let source = "src/bin/qml-counter/main.cpp";
+    let main = fs::read_to_string(p.dir.join(source)).unwrap();
+    let checks = r#"    if (!QFile::exists(label_resource) || !QFile::exists(":/custom/Legacy.qml")
+        || QFile::exists(":/Legacy.qml")) {
+        return 1;
+    }
+    QQmlApplicationEngine engine;"#;
+    let main = main.replace("    QQmlApplicationEngine engine;", checks);
+    p.write(
+        source,
+        &format!("#include <QtCore/QFile>\n#include \"labels/labels.hpp\"\n{main}"),
+    );
+    p.write(
+        "src/libs/labels/labels.hpp",
+        "#pragma once\ninline constexpr auto label_resource = \":/libs/labels/Label.qml\";\n",
+    );
+    p.write("src/libs/labels/Label.qml", "import QtQuick\nText {}\n");
+    p.write(
+        "src/bin/qml-counter/Legacy.qml",
+        "import QtQuick\nItem {}\n",
+    );
+    p.write(
+        "src/bin/qml-counter/custom.qrc",
+        "<RCC><qresource prefix=\"/custom\"><file>Legacy.qml</file></qresource></RCC>\n",
+    );
+
+    let run = |command: &Path, args: &[&str]| {
+        let out = Command::new(command)
+            .args(args)
+            .current_dir(&p.dir)
+            .env("QT_QPA_PLATFORM", "offscreen")
+            .env("CC", "clang")
+            .env("CXX", "clang++")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{command:?} {args:?}:\n{}",
+            text(&out)
+        );
+        text(&out)
+    };
+    let build_and_run = || run(Path::new(easypp()), &["run", "--release", "--", "--check"]);
+    assert!(build_and_run().contains("rcc (QML)"));
+    assert!(!build_and_run().contains("rcc (QML)"));
+    p.write(
+        "src/bin/qml-counter/qml/labels.js",
+        "function counterText(count) { return ['Count:', count].join(' ') }\n",
+    );
+    assert!(build_and_run().contains("rcc (QML)"));
+    assert!(!build_and_run().contains("rcc (QML)"));
+
+    if have("cmake") && have("ninja") {
+        p.ok(&["export-cmake"]);
+        run(
+            Path::new("cmake"),
+            &[
+                "-S",
+                ".",
+                "-B",
+                "build-cmake",
+                "-G",
+                "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release",
+            ],
+        );
+        run(Path::new("cmake"), &["--build", "build-cmake"]);
+        run(Path::new("./build-cmake/qml-counter"), &["--check"]);
+    }
+}
+
 /// Exercises real KConfig output, including its generated Q_OBJECT class,
 /// transitive library headers, schema edits and recovery of either output.
 #[test]

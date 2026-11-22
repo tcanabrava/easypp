@@ -297,8 +297,9 @@ pub fn discover(
             .iter()
             .filter_map(|i| system.resolve(i))
             .collect();
-        lib.qt = QtFiles::from_files(&files, scan.moc);
+        lib.qt = QtFiles::from_files(&lib.dir, &files, scan.moc);
         lib.system.extend(resource_dep(&lib.qt, &system)?);
+        lib.system.extend(qml_dep(&lib.qt, &system)?);
         if !lib.qt.kconfig.is_empty() {
             lib.system.extend(system.resolve("KConfigSkeleton"));
         }
@@ -362,7 +363,7 @@ pub fn discover(
                 .chain(bins.iter().chain(&tests).flat_map(|t| t.system.iter()));
             Some(qt::find_tools(deps).ok_or_else(|| {
                 format!(
-                    "'{name}' needs moc/uic/rcc (Q_OBJECT, .ui or .qrc files), but no Qt \
+                    "'{name}' needs Qt code generation (moc, uic or rcc), but no Qt \
                      installation was found through its #includes and pkg-config"
                 )
             })?)
@@ -405,6 +406,15 @@ fn resource_dep(files: &QtFiles, system: &System) -> Result<Option<SysDep>, Stri
         .ok_or_else(|| "GResource manifests need GIO development headers".into())
 }
 
+fn qml_dep(files: &QtFiles, system: &System) -> Result<Option<SysDep>, String> {
+    if files.qml.is_none() {
+        return Ok(None);
+    }
+    system.package("Qt6Qml").map(Some).ok_or_else(|| {
+        "QML resources need Qt 6 QML development files (Qt6Qml via pkg-config)".into()
+    })
+}
+
 fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>, String> {
     let mut targets: Vec<Target> = Vec::new();
     let mut seen: HashMap<String, PathBuf> = HashMap::new();
@@ -444,7 +454,7 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
         dependencies.extend(ctx.modules.libraries(&sources, None)?);
         let libs = link_order(&dependencies, ctx.libs, ctx.lib_order);
         // A folder target owns its .ui/.qrc files; a single-file target has none.
-        let qt = QtFiles::from_files(if entry.is_dir() { &files } else { &[] }, scan.moc);
+        let qt = QtFiles::from_files(&entry, if entry.is_dir() { &files } else { &[] }, scan.moc);
 
         let mut system: Vec<SysDep> = Vec::new();
         let own = scan.external.iter().filter_map(|i| ctx.system.resolve(i));
@@ -467,6 +477,11 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
             system.extend(ctx.system.resolve("KConfigSkeleton"));
         }
         if let Some(dep) = resource_dep(&qt, ctx.system)?
+            && !system.contains(&dep)
+        {
+            system.push(dep);
+        }
+        if let Some(dep) = qml_dep(&qt, ctx.system)?
             && !system.contains(&dep)
         {
             system.push(dep);

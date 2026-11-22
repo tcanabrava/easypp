@@ -424,6 +424,24 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
 
     let name = &target.name;
     let _ = writeln!(w, "add_executable({name} {})", list(sources));
+    let qml = target.qt.qml.iter().chain(
+        target
+            .libs
+            .iter()
+            .filter_map(|lib| project.libs[lib].qt.qml.as_ref()),
+    );
+    for (index, resources) in qml.enumerate() {
+        let _ = writeln!(
+            w,
+            "qt6_add_resources({name} easypp_qml_{index} PREFIX \"{}\" BASE \"{}\" FILES",
+            resources.prefix,
+            resources.base.display()
+        );
+        for file in &resources.files {
+            let _ = writeln!(w, "    \"{}\"", file.display());
+        }
+        let _ = writeln!(w, ")");
+    }
     export_modules(w, name, "PRIVATE", modules);
     let _ = writeln!(
         w,
