@@ -158,7 +158,7 @@ fn cmake(project: &Project) -> String {
     if !cuda.is_empty() {
         let _ = writeln!(
             w,
-            "set(CMAKE_CUDA_STANDARD {})\nset(CMAKE_CUDA_STANDARD_REQUIRED ON)",
+            "set(CMAKE_CUDA_STANDARD {})\nset(CMAKE_CUDA_STANDARD_REQUIRED ON)\nset(CMAKE_CUDA_SEPARABLE_COMPILATION ON)",
             crate::cuda::STANDARD
         );
     }
@@ -215,7 +215,7 @@ endif()
     let sanitize = "$<$<CONFIG:Debug>:-fsanitize=address,undefined;-fno-sanitize-recover=undefined;-fno-omit-frame-pointer>";
     let _ = writeln!(
         w,
-        "add_compile_options(\"$<$<NOT:$<COMPILE_LANGUAGE:CUDA>>:{sanitize}>\")\nadd_link_options(\"{sanitize}\")"
+        "add_compile_options(\"$<$<NOT:$<COMPILE_LANGUAGE:CUDA>>:{sanitize}>\")\nadd_link_options(\"$<HOST_LINK:{sanitize}>\")"
     );
     let _ = writeln!(
         w,
@@ -467,17 +467,10 @@ fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<
 
     let name = &target.name;
     let _ = writeln!(w, "add_executable({name} {})", list(sources));
-    if crate::cuda::contains_sources(
-        target.sources.iter().chain(
-            target
-                .libs
-                .iter()
-                .flat_map(|lib| &project.libs[lib].sources),
-        ),
-    ) {
+    if project.target_has_cuda_sources(target) {
         let _ = writeln!(
             w,
-            "set_target_properties({name} PROPERTIES LINKER_LANGUAGE CXX CUDA_RUNTIME_LIBRARY None)"
+            "set_target_properties({name} PROPERTIES LINKER_LANGUAGE CXX CUDA_RUNTIME_LIBRARY Shared CUDA_RESOLVE_DEVICE_SYMBOLS ON)"
         );
     }
     if let Some(module) = target.qt.qml.as_ref().and_then(|qml| qml.module.as_ref()) {

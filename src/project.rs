@@ -107,6 +107,17 @@ pub struct Project {
     pub modules: crate::modules::Modules,
 }
 
+impl Project {
+    pub fn target_has_cuda_sources(&self, target: &Target) -> bool {
+        crate::cuda::contains_sources(
+            target
+                .sources
+                .iter()
+                .chain(target.libs.iter().flat_map(|lib| &self.libs[lib].sources)),
+        )
+    }
+}
+
 pub const LIBS_DIR: &str = "src/libs";
 pub(crate) const BIN_DIR: &str = "src/bin";
 pub(crate) const TESTS_DIR: &str = "src/tests";

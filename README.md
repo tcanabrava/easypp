@@ -249,7 +249,9 @@ default architecture. The project database remembers the choice across
 profiles and `--no-cache` builds. See it with `easypp info`; CMake exports
 carry over a selected architecture. `easypp clean` removes the saved choice.
 
-Keep a kernel and the device functions it calls in the same translation unit.
+CUDA kernels can call device functions defined in other `.cu` files in the
+target or its static libraries. easypp runs device linking before host linking
+and carries this setup into CMake exports.
 
 The [CUDA smoke project](tests/fixtures/cuda) builds without a GPU. Its
 `--gpu` argument launches a kernel and checks the result on a machine with

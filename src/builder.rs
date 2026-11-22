@@ -348,6 +348,16 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
             .filter(|n| !libs[*n].sources.is_empty())
             .map(|n| archive_path(opts, n))
             .collect();
+        let device_runtime = if project.target_has_cuda_sources(target) {
+            let cuda = project.cuda.as_ref().expect("discovered CUDA toolkit");
+            let runtime = cuda.device_runtime()?;
+            objects.push(link_cuda_device_code(
+                project, opts, target, cuda, &runtime,
+            )?);
+            Some(runtime)
+        } else {
+            None
+        };
 
         let standard_modules: BTreeSet<&Path> = project.modules.required_standard_sources(
             own.sources
@@ -366,6 +376,9 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         let mut cmd = vec![driver(if any_cpp { Lang::Cpp } else { Lang::C }).to_string()];
         cmd.extend(objects.iter().chain(&archives).map(|p| path_str(p)));
         cmd.extend(target.link_flags.iter().cloned());
+        if let Some(runtime) = &device_runtime {
+            cmd.push(path_str(runtime));
+        }
         if any_cuda {
             let dir = &project.cuda.as_ref().expect("discovered CUDA toolkit").lib;
             cmd.extend([
@@ -382,7 +395,11 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         }
         cmd.extend(["-o".into(), path_str(&exe)]);
 
-        let inputs: Vec<PathBuf> = objects.into_iter().chain(archives).collect();
+        let inputs: Vec<PathBuf> = objects
+            .into_iter()
+            .chain(archives)
+            .chain(device_runtime)
+            .collect();
         if !up_to_date(&exe, &cmd, &inputs) {
             ui::status("Linking", &exe.display().to_string());
             run_step(&exe, &cmd, opts.verbose, Some(project))?;
@@ -412,6 +429,50 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         ),
     );
     Ok(())
+}
+
+fn cuda_device_object(opts: &Options, target: &Target) -> PathBuf {
+    opts.dir()
+        .join("obj")
+        .join(target_key(target))
+        .join("cuda-device-link.o")
+}
+
+fn link_cuda_device_code(
+    project: &Project,
+    opts: &Options,
+    target: &Target,
+    cuda: &crate::cuda::Toolkit,
+    runtime: &Path,
+) -> Result<PathBuf, String> {
+    let output = cuda_device_object(opts, target);
+    let mut inputs: Vec<_> = target
+        .sources
+        .iter()
+        .filter(|path| Lang::of(path) == Some(Lang::Cuda))
+        .map(|path| object_path(opts, path))
+        .chain(
+            target
+                .libs
+                .iter()
+                .filter(|lib| crate::cuda::contains_sources(&project.libs[*lib].sources))
+                .map(|lib| archive_path(opts, lib)),
+        )
+        .collect();
+    let mut cmd = vec![
+        path_str(&cuda.nvcc),
+        "--device-link".into(),
+        "-Xcompiler=-fPIC".into(),
+    ];
+    cmd.extend(cuda.architecture_flag());
+    cmd.extend(inputs.iter().map(|path| path_str(path)));
+    cmd.extend(["-o".into(), path_str(&output)]);
+    inputs.push(runtime.to_path_buf());
+    if !up_to_date(&output, &cmd, &inputs) {
+        ui::status("Device linking", &target.name);
+        run_step(&output, &cmd, opts.verbose, None)?;
+    }
+    Ok(output)
 }
 
 /// Deletes files under build/<profile>/{bin,tests,lib,obj,gen} that no current
@@ -467,6 +528,9 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
     }
     for (target, _) in &targets {
         expected.insert(exe_path(opts, target));
+        if project.target_has_cuda_sources(target) {
+            expected.insert(cuda_device_object(opts, target));
+        }
     }
     if opts.sanitizers() {
         let src = sanitizer_defaults_source(opts);
@@ -932,9 +996,7 @@ fn compile_flags(
     if Lang::of(src) == Some(Lang::Cuda) {
         let cuda = project.cuda.as_ref().expect("discovered CUDA toolkit");
         flags[0] = path_str(&cuda.nvcc);
-        if let Some(arch) = cuda.architecture().filter(|arch| *arch != "default") {
-            flags.push(format!("-arch={arch}"));
-        }
+        flags.extend(cuda.architecture_flag());
     }
     if project.modules.is_standard_source(src) {
         flags.push("-w".into());
@@ -977,7 +1039,10 @@ pub(crate) fn source_flags(
         cmd.extend(["-O0".into(), "-g".into()]);
     }
     if lang == Lang::Cuda {
-        cmd.push("--forward-unknown-to-host-compiler".into());
+        cmd.extend([
+            "--forward-unknown-to-host-compiler".into(),
+            "--relocatable-device-code=true".into(),
+        ]);
     } else if opts.sanitizers() {
         cmd.extend(SANITIZE.map(String::from));
     }

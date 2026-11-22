@@ -1,11 +1,12 @@
 #include "device.hpp"
 #include "answer.cuh"
+#include "value/value.cuh"
 #include <cuda_runtime.h>
 
 namespace {
 __global__ void write_answer(int* output)
 {
-    *output = answer;
+    *output = device_answer();
 }
 }
 

@@ -68,6 +68,24 @@ impl Toolkit {
         self.architecture.get().map(String::as_str)
     }
 
+    pub fn architecture_flag(&self) -> Option<String> {
+        self.architecture()
+            .filter(|arch| *arch != "default")
+            .map(|arch| format!("-arch={arch}"))
+    }
+
+    pub fn device_runtime(&self) -> Result<PathBuf, String> {
+        let archive = self.lib.join("libcudadevrt.a");
+        if !archive.is_file() {
+            return Err(format!(
+                "CUDA device linking needs {}. Install the CUDA development files that match {}.",
+                archive.display(),
+                self.nvcc.display()
+            ));
+        }
+        Ok(archive)
+    }
+
     pub fn configure(&self) -> Result<(), String> {
         if self.architecture.get().is_some() {
             return Ok(());

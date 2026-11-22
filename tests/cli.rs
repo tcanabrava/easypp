@@ -474,18 +474,32 @@ fn cuda_builds_a_library_and_rebuilds_when_a_header_changes() {
     let first = text(&first);
     assert!(first.contains("CUDA runtime"), "{first}");
     assert!(first.contains(&format!("-arch={architecture}")), "{first}");
+    assert!(first.contains("Device linking demo"), "{first}");
     assert!(
         p.ok(&["info", "--no-cache"])
             .contains(&format!("CUDA architecture: {architecture}"))
     );
-    assert!(!p.ok(&["build", "-j4"]).contains("Compiling"));
+    let noop = p.ok(&["build", "-j4"]);
+    assert!(
+        !noop.contains("Compiling") && !noop.contains("Device linking"),
+        "{noop}"
+    );
     p.write(
         "src/libs/device/answer.cuh",
         "#pragma once\nconstexpr int answer = 40 + 2;\n",
     );
     let rebuilt = p.ok(&["run", "-j4"]);
     assert!(rebuilt.contains("Compiling src/libs/device/device.cu"));
+    assert!(rebuilt.contains("Device linking demo"));
     assert!(rebuilt.contains("CUDA runtime"));
+    let host_source = "src/bin/demo.cpp";
+    let host_text = fs::read_to_string(p.dir.join(host_source)).unwrap();
+    p.write(host_source, &format!("{host_text}\n// Host-only edit.\n"));
+    let rebuilt = p.ok(&["build", "-j4"]);
+    assert!(
+        rebuilt.contains("Compiling src/bin/demo.cpp") && !rebuilt.contains("Device linking"),
+        "{rebuilt}"
+    );
     if have("cmake") && have("ninja") {
         p.ok(&["export-cmake"]);
         let cmake = fs::read_to_string(p.dir.join("CMakeLists.txt")).unwrap();
