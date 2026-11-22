@@ -561,7 +561,8 @@ system libraries must be installed, and third-party code must be copied into
 modules and header units are supported through explicit imports in source files.
 Easypp can build standard-library modules when the installed toolchain ships
 their source manifest. Named modules from external packages are outside this
-scope. CMake export supports project-local named modules.
+scope. CMake export supports project-local named modules and standard-library
+modules with a compatible CMake version.
 These are not
 oversights: each one would add a configuration surface. But they put a clear limit
 on where the tool can be used.

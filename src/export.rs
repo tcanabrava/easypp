@@ -16,9 +16,6 @@ pub fn write(project: &Project, force: bool) -> Result<(), String> {
                 .into(),
         );
     }
-    if project.modules.standard_sources().next().is_some() {
-        return Err("CMake export does not yet configure standard library modules. Build this project with easypp.".into());
-    }
     let path = project.root.join("CMakeLists.txt");
     if path.exists() && !force {
         return Err("CMakeLists.txt already exists; use --force to replace it".into());
@@ -124,13 +121,28 @@ fn cmake(project: &Project) -> String {
         w,
         "# Each folder in src/libs, src/bin and src/tests is the target it was in easypp.\n"
     );
-    let version = if project.modules.is_empty() {
+    let standard_modules = project.modules.standard_sources().next().is_some();
+    let version = if standard_modules {
+        "4.5"
+    } else if project.modules.is_empty() {
         "3.25"
     } else {
         "3.28"
     };
     let _ = writeln!(w, "cmake_minimum_required(VERSION {version})");
     let _ = writeln!(w, "project({name} LANGUAGES C CXX)\n");
+    if standard_modules {
+        let _ = writeln!(
+            w,
+            r#"if(NOT CMAKE_GENERATOR MATCHES "^Ninja($| Multi-Config$)")
+  message(FATAL_ERROR "Standard library modules require a Ninja generator.")
+endif()
+if(NOT EXISTS "${{CMAKE_CXX_STDLIB_MODULES_JSON}}")
+  message(FATAL_ERROR "The selected C++ toolchain does not provide a standard library module manifest.")
+endif()
+"#
+        );
+    }
     let _ = writeln!(
         w,
         "set(CMAKE_CXX_STANDARD 23)\nset(CMAKE_CXX_STANDARD_REQUIRED ON)\nset(CMAKE_CXX_EXTENSIONS OFF)"

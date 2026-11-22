@@ -64,7 +64,7 @@ options or `easypp help deps add` for a nested command.
   module sources supplied by Clang's selected C++ standard library. Easypp
   discovers them from its installed JSON manifest and compiles only the
   modules a build needs. See the [standard modules example](examples/std-module/README.md).
-  Projects using these imports currently build through easypp directly.
+  CMake export for these imports requires CMake 4.5 or newer and Ninja.
 - **C++ header units**: `import "header.hpp";` and `import <array>;` compile the
   header as a Clang PCM. The same discovery rules used for includes determine
   library dependencies. Changes to the imported header or its textual includes
