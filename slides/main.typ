@@ -43,7 +43,7 @@
   #v(1.1cm)
   #text(21pt)[Tomaz Canabrava]
   #v(0.5em)
-  #text(16pt, fill: muted)[From a first multi-file program to framework apps and C++ modules]
+  #text(16pt, fill: muted)[A C++ workflow from a first library to a desktop application]
 ]
 
 #slide[Extract a library. Meet the linker.][
@@ -109,48 +109,34 @@
   #text(22pt, weight: "bold", fill: blue)[There is no project build file.]
 ]
 
-#slide[The first working project][
-  ```sh
-  easypp new hello
-  cd hello
-  easypp run
-  easypp test
-  ```
-  #v(0.4em)
+#slide[The first success arrives early][
+  #text(27pt)[A student starts with a program, a library and one test.]
+  #v(0.6em)
   #cols([
-    `new` creates a library, a program, a test, and editor formatting/lint settings.
+    #label[First run]
+    The executable makes the result something the student can see.
   ], [
-    `build` writes `compile_commands.json` and compiles in parallel with Clang.
+    #label[First change]
+    A test gives the student a way to tell whether that change worked.
   ])
   #v(0.7em)
-  #note[The same commands work after the project grows to several libraries.]
+  #note[That same workflow is still there after the source tree grows.]
 ]
 
-#slide[A Qt application is just a source file][
+#slide[What changes when Hello World gets a window?][
   #cols([
-    #set text(size: 17pt)
+    #label[The source]
     ```cpp
-    // src/bin/window.cpp
     #include <QApplication>
     #include <QPushButton>
-
-    int main(int argc, char **argv)
-    {
-        QApplication app(argc, argv);
-        QPushButton button("Hello");
-        button.show();
-        return app.exec();
-    }
     ```
+    The new code says it needs a button and an application.
   ], [
-    #label[Build and launch]
-    ```sh
-    easypp run window
-    ```
-    #text(18pt)[The headers select Qt 6 Widgets. Installed metadata supplies its include paths and dependencies.]
-    #v(0.6em)
-    #text(18pt)[No Qt module list or linker flags in a project file.]
+    #label[The build]
+    The installed Qt metadata tells easypp which library owns those headers and what that library needs.
   ])
+  #v(0.7em)
+  #note[The student can move from a console exercise to a desktop app using the layout they already know.]
 ]
 
 #slide[An include creates a dependency][
@@ -195,46 +181,30 @@
   #note[The include identifies both the header and the library that supplies it.]
 ]
 
-#slide[System libraries come from installed metadata][
-  #table(columns: (1fr, 1fr),
-    [Source], [Discovered dependency],
-    [`<SDL2/SDL.h>`], [`sdl2` through pkg-config],
-    [`<boost/json.hpp>`], [`libboost_json`],
-    [`<QPushButton>`], [Qt 6 Widgets + its dependencies],
-    [`<KXmlGuiWindow>`], [Installed KDE target metadata],
-    [`<omp.h>` or an OpenMP pragma], [`-fopenmp`],
-  )
-  #v(0.5em)
-  #text(17pt)[Header ownership, package include paths and library names provide the clues.
-  System headers use `-isystem`; system libraries use `--as-needed`.]
-  #v(0.3em)
-  #text(17pt, fill: muted)[System dependencies are installed separately. A project can also declare packages through Conan.]
+#slide[The same include can mean different things][
+  #cols([
+    #label[Inside the project]
+    `"game/game.hpp"` points to a library the student can open and edit.
+  ], [
+    #label[On the machine]
+    `<QPushButton>` points to a library installed with Qt.
+  ])
+  #v(0.85em)
+  #note[This is where inference has a limit. Competing installed packages can provide the same header, so easypp shows which one it chose.]
 ]
 
-#slide[A fresh checkout can restore its packages][
+#slide[The assignment has to work on a second laptop][
+  #text(25pt)[An include tells us which API the student wants. It cannot tell us which version the assignment used.]
+  #v(0.7em)
   #cols([
-    #label[Record what the project needs]
-    ```ini
-    # conanfile.txt
-    [requires]
-    zlib/1.3.1
-    nlohmann_json/3.12.0
-    gtest/1.17.0
-    ```
-    #text(17pt)[`easypp deps add` records a new requirement after installation.]
+    #label[The source tree]
+    Determines who uses zlib, JSON and GoogleTest.
   ], [
-    #label[Run the normal commands]
-    ```sh
-    easypp run --release
-    easypp test --release
-    easypp info --release
-    ```
-    #text(17pt)[The first run installs dependencies for the selected profile.
-    Subsequent runs reuse the generated package metadata.]
+    #label[The Conan manifest]
+    Records the versions a fresh checkout should restore.
   ])
-  #v(0.5em)
-  #note[#text(17pt)[Conan supplies `.pc` files. Source includes still determine which targets use a package.]]
-  #source[examples/conan-json. Verified actual header and archive paths with Clang depfiles and linker tracing.]
+  #v(0.7em)
+  #source[examples/conan-json; verified selected headers and libraries with compiler depfiles and linker tracing.]
 ]
 
 #slide[An import changes the compilation order][
@@ -272,42 +242,40 @@
   #source[examples/modules, examples/header-units, examples/std-module. Demonstrations, separate from Blockfall timings.]
 ]
 
-#slide[Code generation follows the same rule][
-  #table(columns: (1fr, 1.3fr, 1fr),
-    [Discovered input], [Tool], [Build output],
-    [`Q_OBJECT` in a header/source], [Qt moc], [Meta-object code],
-    [`form.ui`], [Qt uic], [`ui_form.h`],
-    [`resources.qrc`], [Qt rcc], [Compiled resources],
-    [`settings.kcfgc` + its schema], [KConfig compiler, then moc], [Settings header/source],
-  )
-  #v(0.5em)
-  Generated files live under `build/<profile>/gen/`.\
-  Generation runs before compilation and tracks its inputs.
-  #v(0.4em)
-  #text(17pt, fill: muted)[Qt resources from static libraries link directly into consumers so the linker retains them.]
-]
-
-#slide[Strict defaults are part of the interface][
+#slide[A framework can bring its own source language][
+  #text(25pt)[A Qt Quick view can instantiate a class written in C++.]
+  #v(0.6em)
   #cols([
-    #label[Every own-source build]
-    ```text
-    clang / clang++
-    -std=c17 / -std=c++23
-    -Wall -Wextra -pedantic -Werror
+    #label[C++]
+    ```cpp
+    class Counter : public QObject {
+        Q_OBJECT
+        QML_ELEMENT
+        // ...
+    };
     ```
   ], [
-    #label[Debug is the default]
-    ```text
-    -O0 -g
-    AddressSanitizer
-    UndefinedBehaviorSanitizer
+    #label[QML]
+    ```qml
+    import Easypp.Counter
+
+    Counter { id: counter }
     ```
   ])
-  #v(0.5em)
-  `--release` selects `-O2 -DNDEBUG`.\
-  Third-party sources compile separately with warnings disabled.
-  #v(0.3em)
-  #text(17pt, fill: muted)[Fixed policy reduces configuration choices; it also limits where this tool fits.]
+  #note[#text(18pt)[Qt generates the registration. The same type information lets lint catch a misspelled property before launch.]]
+  #source[examples/qt-qml-module; native build, CMake export and QML lint verified.]
+]
+
+#slide[What feedback does a student get by default?][
+  #cols([
+    #label[At compilation]
+    Strict warnings stop the build when the compiler sees a likely mistake.
+  ], [
+    #label[At execution]
+    Debug sanitizers can stop a program at an invalid memory access and point back to the source.
+  ])
+  #v(0.7em)
+  #note[Students can use both before they learn to configure warning flags or sanitizers.]
 ]
 
 #slide[Minimal setup changes the feedback][
@@ -325,43 +293,28 @@
   #source[Measured with Clang 23.1.5; paper/eval/results.txt. Compiler defaults are environment-specific.]
 ]
 
-#slide[Keep the compiler error; explain the project][
+#slide[An error should tell you where to look][
   #cols([
-    #label[What easypp checks]
-    - Wrong header ownership/spelling
-    - Declaration without a definition
-    - Signature mismatch
-    - Missing function body or `main()`
-    - A library header never included
+    #label[Before a build]
+    Doctor checks which tools and development files the project needs.
   ], [
-    #label[Make the investigation visible]
-    ```sh
-    easypp info
-    easypp build -v
-    easypp debug play
-    ```
-    Debugging uses the installed debugger. Sanitizer failures stop at the fault.
+    #label[After a failure]
+    The compiler's diagnostic remains visible. easypp can point from a missing symbol back to the project's declarations and definitions.
   ])
-  #v(0.35em)
-  #text(17pt, fill: muted)[Hints supplement compiler and linker diagnostics; they do not replace them.]
+  #v(0.7em)
+  #note[A student can start by asking whether the environment is ready, then investigate the code when it is.]
 ]
 
-#slide[Tests and editor support are built in][
+#slide[Testing becomes part of the edit][
+  #text(26pt)[A test is another C++ program with an answer to check.]
+  #v(0.7em)
   #cols([
-    #label[Tests are a folder]
-    - Programs under `src/tests`
-    - Parallel execution
-    - 60-second default time limit
-    - Only failing tests print output
-    - GoogleTest/Catch2 main detection
+    Put it with the other tests and it runs alongside them.
   ], [
-    #label[Use ordinary C++ editors]
-    - `compile_commands.json` for clangd
-    - `watch` updates discovery/codegen
-    - `fmt` runs clang-format
-    - `lint` runs clang-tidy
-    - Project formatting settings win
+    The editor reads the same compilation flags as the build, so it sees the same headers.
   ])
+  #v(0.7em)
+  #source[Tests, compile_commands.json and watch are described in the paper.]
 ]
 
 #slide[Evaluate on a layered game: Blockfall][
@@ -429,33 +382,25 @@
   #source[Blockfall snapshot, 20 Nov 2026. Clang 23.1.5, CMake 4.5.0, Meson 1.12.1, Ninja 1.13.2, Make 4.4.1.]
 ]
 
-#slide[Then try an application we did not write][
+#slide[Could the convention handle somebody else's code?][
   #label[KDE KMines]
-  #v(0.4em)
-  - Import upstream sources and remove project build files.
-  - Move the executable into `src/bin/kmines`.
-  - Build and launch with ordinary easypp commands.
-  #v(0.7em)
-  #note[The attempt exposed missing support for KDE library metadata and KConfig generation. We added both to the shared tool.]
-  #source[Pinned KMines revision dbb447ca171469a55a5efbadbcbb480331dc7a38; examples/kmines/UPSTREAM.]
+  #v(0.45em)
+  #text(25pt)[KMines already knew how to build itself. Could the source tree and installed libraries supply enough information to build and launch it?]
+  #v(0.75em)
+  #note[The first attempt exposed two gaps in easypp: KDE's installed dependency metadata and generated settings classes.]
+  #source[Pinned KMines revision in examples/kmines/UPSTREAM.]
 ]
 
-#slide[What the KDE support actually does][
+#slide[The missing knowledge moved into the tool][
   #cols([
-    #label[Installed library metadata]
-    - Index literal imported-target properties.
-    - Follow include paths, definitions and public dependencies.
-    - Resolve Qt dependencies through installed pkg-config metadata.
+    #label[Finding KDE libraries]
+    Installed metadata says which headers, libraries and other dependencies belong together.
   ], [
-    #label[KConfig generation]
-    - Discover `settings.kcfgc`.
-    - Resolve its `File=` schema.
-    - Generate `.h` and `.cpp` before moc.
-    - Regenerate after schema edits or deletion of either output.
+    #label[Generating settings]
+    A KConfig schema gives Qt code a settings class. A schema edit must regenerate the class before compilation.
   ])
-  #v(0.45em)
-  #text(18pt, weight: "bold", fill: blue)[No project preparation script or dependency list.]
-  #source[src/kde.rs, src/qt.rs; integration test: kde_kconfig_incremental_build.]
+  #v(0.8em)
+  #note[These two conventions now work for other projects, too.]
 ]
 
 #slide[KMines: configuration removed, tool code added][
@@ -481,102 +426,80 @@
   #source[Pinned upstream; reproducible counts: paper/eval/kmines-lines.py and kmines-lines.txt.]
 ]
 
-#slide[The adaptation still has a cost][
+#slide[What came along with the source?][
   #cols([
-    #label[Source and layout changes]
-    - Move executable and theme folders.
-    - Supply ordinary version/logging declarations.
-    - Remove separately compiled moc includes.
-    - Replace a deprecated spinbox.
-    - Refer directly to SVG themes.
+    #label[We kept]
+    The game, its settings schema and its themes.
   ], [
-    #label[What we verified]
-    - Clean debug build with sanitizers
-    - Launch with local runtime assets
-    - KConfig classes requiring moc
-    - Incremental regeneration/recovery
-    - Build of exported CMake project
+    #label[We adapted]
+    File placement, a deprecated widget and how the game loads its themes.
   ])
-  #v(0.4em)
-  #text(17pt, fill: muted)[One successful application is a case study, not proof of general KDE compatibility.]
+  #v(0.8em)
+  #note[The result is a build-and-launch case study. The upstream project also handles installation, translations and documentation.]
 ]
 
-#slide[GNOME VTE exercised a different build path][
-  #cols([
-    #label[The upstream GTK 4 demo]
-    - Uses the installed VTE widget library.
-    - Keeps its GtkBuilder forms, menus and CSS.
-    - Builds and launches from the easypp layout.
-  ], [
-    #label[What easypp learned to do]
-    - Run `glib-compile-resources` from the manifest.
-    - Track the assets and link their registration code.
-    - Prefer GTK 4 VTE metadata for the shared header.
-  ])
+#slide[The VTE demo brought its own UI with it][
+  #text(25pt)[The upstream demo keeps its GtkBuilder forms, menus and CSS, and links against an installed VTE widget library.]
+  #v(0.7em)
+  The build has to follow those assets from their manifest to the executable. Editing a form must reach the next launch.
+  #v(0.75em)
+  #source[examples/vte; clean build, desktop launch and CMake export verified.]
+]
+
+#slide[One board. Three kinds of work.][
+  #grid(columns: (1fr, 1fr, 1fr), column-gutter: 0.6cm,
+    [#label[CUDA] #parbreak() Evolves the board.],
+    [#label[GTK 4] #parbreak() Shows the result and handles input.],
+    [#label[OpenMP] #parbreak() Counts live cells and computes a CPU reference.],
+  )
+  #v(0.85em)
+  #note[On the RTX A500, the GPU and CPU boards matched cell for cell over 24 generations.]
   #v(0.45em)
-  #note[#text(17pt)[Verified the clean build, desktop launch, and CMake export.]]
-  #source[examples/vte. VTE 0.84.1, upstream revision f2223e45. Capability demonstration.]
+  #text(17pt, fill: muted)[The CPU and GPU started from the same board and compared the result after each step.]
+  #source[examples/life-cuda; headless comparison and GTK launch verified.]
 ]
 
-#slide[The boundary is deliberate][
+#slide[Where does inference stop helping?][
   #cols([
-    #label[Current scope]
-    - Linux and Clang
-    - System and Conan packages
-    - Fixed flags and folder layout
-    - Static project libraries
-    - Qt, KDE and GLib generation
-    - C++ modules and header units
+    #label[What the source tells us]
+    Who includes a header, which library owns it, and which modules must compile first.
   ], [
-    #label[Outside that scope]
-    - Per-target build policy
-    - Shared project libraries
-    - External named modules
-    - Installation and packaging
-    - Arbitrary CMake expressions
+    #label[What still needs a decision]
+    How to install a program, how to arrange shared libraries, and which external package variant a project intends to use.
   ])
-  #v(0.4em)
-  #text(17pt, fill: muted)[Include scanning is not a full preprocessor. Unknown conditions are scanned conservatively;
-  macro includes cannot be followed. Header-to-library mapping remains heuristic.]
+  #v(0.8em)
+  #text(18pt)[A compiler can see dependencies hidden behind macros. A scan of the source can miss them.]
 ]
 
-#slide[A path to the next course][
-  ```sh
-  easypp export-cmake
-  ```
-  #cols([
-    #label[Concepts already learned]
-    #v(0.3em)
-    Folder = library or executable\
-    Include = dependency\
-    Program exit status = test result
-  ], [
-    #label[Their CMake names]
-    #v(0.3em)
-    `add_library` / `add_executable`\
-    `target_link_libraries`\
-    `add_test`
-  ])
+#slide[Teach CMake with a project students already know][
+  #text(25pt)[Start with the program they wrote and the library they extracted.]
   #v(0.65em)
-  #note[Generate the build description of a project the students already understand, then teach it.]
+  #cols([
+    #label[The familiar project]
+    A library folder, a program that uses it and a test.
+  ], [
+    #label[Its exported CMake]
+    Those same parts now have names in a build language.
+  ])
+  #v(0.7em)
+  #note[Students can read the generated description and connect each target to code they already understand.]
 ]
 
-#slide[What this evidence supports][
-  - Folder conventions can remove project build-file maintenance for this scope.
-  - Strict defaults give earlier feedback on common beginner mistakes.
-  - KDE and GNOME demos, Conan packages and modules show how the workflow extends.
-  #v(0.6em)
-  #text(21pt, weight: "bold", fill: blue)[Learning outcomes still need a classroom study.]
-  #v(0.4em)
-  #text(18pt)[Blockfall is the controlled comparison. The other examples check particular behaviours
-  and do not provide comparative timings.]
+#slide[What would we test in a classroom?][
+  #text(26pt)[Can students reach a working multi-library program sooner when they start with source conventions?]
+  #v(0.7em)
+  #cols([
+    #label[What we measured]
+    Build-file size, the cost of a library extraction, compiler feedback and build time.
+  ], [
+    #label[What a course study could measure]
+    Time to a first working program, the errors students meet, and what they understand about linking.
+  ])
 ]
 
 #page(footer: none)[
   #v(1.2cm)
-  #text(39pt, weight: "bold")[Teach libraries, headers and linking.]
-  #v(0.45em)
-  #text(32pt, fill: blue)[Let conventions carry the build.]
+  #text(39pt, weight: "bold")[What should a student have to learn first?]
   #v(1cm)
   #text(22pt)[easypp · Folders, Not Build Files]
   #v(0.4em)

@@ -200,3 +200,19 @@ cmake-modules:
   url:
     value: https://cmake.org/cmake/help/v4.5/manual/cmake-cxxmodules.7.html
     date: 2026-11-22
+
+qt-qml-types:
+  type: web
+  title: Defining QML Types from C++
+  author: The Qt Company
+  url:
+    value: https://doc.qt.io/qt-6/qtqml-cppintegration-definetypes.html
+    date: 2026-11-22
+
+nvcc-docs:
+  type: web
+  title: NVIDIA CUDA Compiler Driver NVCC
+  author: NVIDIA
+  url:
+    value: https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/#using-separate-compilation-in-cuda
+    date: 2026-11-22

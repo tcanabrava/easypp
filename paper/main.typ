@@ -44,7 +44,8 @@
   require 25–38 lines of build code to match #easypp's configuration. Extracting
   a library without editing the build description produces a link error in all
   three baselines. #easypp builds and runs the tests. Separate examples exercise
-  upstream KDE and GNOME applications, Conan package selection, and C++ modules.
+  upstream KDE and GNOME applications, Conan package selection, C++ modules,
+  Qt Quick with C++ types, and a CUDA, GTK 4 and OpenMP application.
   The results describe configuration burden and compiler feedback. A classroom
   study would be needed to assess effects on learning.
 ]
@@ -70,7 +71,7 @@ multi-file program needs no build knowledge at all.
 
 This paper asks how far the same idea goes in C++. Our contributions are:
 
-+ #easypp, a build tool of about 7,600 lines of Rust, including tests in
++ #easypp, a build tool of about 9,000 lines of Rust, including tests in
   the implementation modules. It derives targets and dependencies from folders,
   includes and imports, and provides defaults for compilation, tests and
   framework code generation
@@ -82,7 +83,8 @@ This paper asks how far the same idea goes in C++. Our contributions are:
   build time (@sec-eval). All scripts and build files are published with the
   tool.
 + Capability demonstrations using upstream applications, profile-specific Conan
-  dependencies and C++ modules (@sec-kmines, @sec-capabilities).
+  dependencies, C++ modules, QML registration and CUDA device linking
+  (@sec-kmines, @sec-capabilities).
 + An argument, with its limits, for why this simplifies teaching (@sec-teaching,
   @sec-limits).
 
@@ -221,6 +223,15 @@ run without configuration: a header or source with `Q_OBJECT` goes through moc, 
 resources are linked straight into the programs that use it, because inside a
 static archive the linker would drop them. Qt 5 is not supported.
 
+*Qt Quick with C++.* A C++ executable can ship its QML and JavaScript through
+Qt resources. If it declares a module URI in `qml/qmldir`, #easypp runs moc and
+`qmltyperegistrar` for types annotated with `QML_ELEMENT` or
+`QML_NAMED_ELEMENT` @qt-qml-types. The generated registration and
+`.qmltypes` metadata connect the C++ declarations to runtime imports and
+`qmllint`. Explicit `.qrc` files retain their resource paths. If Qt reports
+a missing import and the application fails, `easypp run` preserves the Qt
+diagnostic and points to the missing module's package or import path.
+
 *KDE Frameworks 6.* Some KDE libraries publish their dependency metadata only
 as installed CMake target exports. #easypp reads their literal include paths,
 compile definitions, library locations and public dependencies into the same
@@ -257,7 +268,9 @@ Conan's `PkgConfigDeps` generator supplies package and component metadata
 `build/conan/debug/` or `build/conan/release/`. When a selected Conan package
 owns a header, it takes precedence over the system copy. The `info`
 command reports that choice. A Conan lockfile can additionally pin the
-resolved recipe graph.
+resolved recipe graph. A change to the lockfile invalidates the installation
+metadata. An interrupted dependency installation can be retried on the next
+build.
 
 == Scheduling C++ modules <sec-modules>
 
@@ -283,6 +296,25 @@ demand. The CMake exporter uses module file sets for project-local modules.
 Exporting standard-library modules requires CMake 4.5 or newer and Ninja.
 The exporter rejects header units @cmake-modules.
 
+== Mixed host and device compilation <sec-cuda>
+
+A `.cu` source selects NVIDIA's `nvcc` and CUDA C++20. C and C++ sources
+continue through Clang, so ordinary host code retains the Debug sanitizers.
+CUDA sources produce relocatable device code. After compilation and
+archiving, the device linker resolves calls across CUDA translation units
+and static project libraries. The host link combines the resulting object
+with the program and CUDA runtime @nvcc-docs. CMake exports enable CUDA
+separate compilation and device linking for the corresponding targets.
+
+The first CUDA build prompts for a target architecture in a terminal. The
+recommendation uses the first detected visible NVIDIA GPU and the targets
+supported by the installed compiler. Noninteractive builds accept that
+recommendation. With no visible GPU they use the toolkit default, so a
+build server can compile the project. The selected target is stored in the
+project database and passed to both CUDA compilation and device linking.
+Changing it through `easypp cuda-arch` invalidates those outputs through their
+command stamps. Unchanged C and C++ objects are reused.
+
 == A per-project cache <sec-cache>
 
 Discovery has a fixed cost that does not depend on the project. On the evaluation
@@ -302,7 +334,9 @@ written back, in one transaction.
 The first build pays to populate the cache. Later builds reuse the cached
 metadata while its fingerprint remains current. If the cache cannot be
 opened, #easypp reports the problem and continues by rediscovering the
-project. `easypp clean` deletes the cache with the rest of `build/`.
+project. CUDA architecture selection uses the same database even when
+discovery caching is bypassed. `easypp clean` removes the saved architecture
+with the rest of `build/`.
 
 == Fixed, strict defaults
 
@@ -311,29 +345,35 @@ project. `easypp clean` deletes the cache with the rest of `build/`.
     columns: (auto, 1fr),
     align: left,
     table.header[*Setting*][*Value*],
-    [Compilers], [`clang` for `.c`, `clang++` for `.cpp/.cc/.cxx`; executables containing C++ link with `clang++`],
-    [Language], [`-std=c17`, `-std=c++23` (no GNU extensions)],
-    [Diagnostics], [`-Wall -Wextra -pedantic -Werror` for the project's code; `-w` for third-party sources],
+    [Compilers], [`clang` for C, `clang++` for C++, `nvcc` for CUDA translation units],
+    [Language], [C17, C++23 and CUDA C++20 for project sources],
+    [Diagnostics], [`-Wall -Wextra -pedantic -Werror` for project C and C++ sources; CUDA forwards `-Wall -Wextra -Werror` to its host compiler],
     [Profiles], [debug `-O0 -g` with AddressSanitizer and UBSan, undefined behaviour fatal (default); `--release` gives `-O2 -DNDEBUG`],
     [Third-party and system headers], [`-isystem`, so their warnings are not the student's problem],
     [Tests], [in parallel, 60 s limit each, output shown only for failures],
     [Editor support], [`compile_commands.json` @clang-cdb at the project root, kept current by `easypp watch`; `.clang-format` and `.clang-tidy` matching `easypp fmt` and `lint`],
     [Incrementality], [clang depfiles, a command stamp per output, parallel compilation, removal of stale outputs, a per-project discovery cache (@sec-cache)],
   ),
-  caption: [What every #easypp project gets.],
+  caption: [Default policies for #easypp projects.],
 ) <tab-defaults>
 
-Nothing in @tab-defaults can be changed from inside a project, except that
-`--no-sanitize` builds debug without sanitizers. This is deliberate. For
-teaching, a setting that exists is a setting someone must explain, and a warning
-that can be silenced will be.
+Projects share the policies in @tab-defaults. The command line selects the
+profile and can disable sanitizers for a Debug build. CUDA architecture
+selection records a property of the target hardware (@sec-cuda).
 
 Debug executables also get a small generated file with LeakSanitizer
 suppressions for libraries that keep memory until exit on purpose (GTK, GLib,
 fontconfig, Qt, SDL, Mesa). A leak report blamed on them would teach students to
-ignore the sanitizer. The four examples run with no sanitizer reports.
+ignore the sanitizer.
 
 == Help around the build <sec-help>
+
+*Checking the environment.* `easypp doctor` checks Clang, the C++23 standard
+library, the linker and the Debug sanitizer runtime before a student creates
+a project. Inside a project it uses dependency discovery to check requirements
+such as Qt tools, CUDA development files, OpenMP and Conan setup. It reports
+missing requirements and remedies. It leaves the project tree untouched and
+installs no packages.
 
 *Errors explained.* After a failed compile or link, the tool's message is kept
 and #easypp adds `help:` lines computed from the project. A missing header gets
@@ -353,9 +393,9 @@ exceptions escaping) without style nagging.
 *Moving on.* `easypp export-cmake` writes a `CMakeLists.txt` in which every
 folder is the target it was: libraries with their links, programs, CTest tests,
 pkg-config packages, OpenMP, Qt with AUTOMOC, AUTOUIC and AUTORCC, the same
-warnings and the debug sanitizers. All four examples, a project with third-party
-sources and one with GoogleTest and Catch2 build with the exported file and pass
-`ctest`.
+warnings and the debug sanitizers. The regression suite checks exported
+builds for ordinary projects and selected examples with generated code,
+modules or CUDA.
 
 = Evaluation <sec-eval>
 
@@ -563,9 +603,17 @@ comparison. They have different inputs and success criteria.
     [Build and incremental regression tests passed. An interface edit rebuilt importers, and a compiler change invalidated cached module interfaces.],
     [Standard library modules], [`import std` and `import std.compat` on Clang 23.1.5 and libstdc++ 16],
     [The demo printed 42 and the test passed. CMake export also built and passed its test with CMake 4.5 and Ninja.],
+    [Qt Quick counter], [Named QML module exposing a C++ type],
+    [The native and exported CMake applications loaded the module. Linting detected an invalid reference to a C++ property.],
+    [CUDA Game of Life], [CUDA evolution, GTK 4 display and an OpenMP reference],
+    [The GTK window opened and advanced. On an RTX A500, the CUDA board matched the CPU reference cell for cell over 24 generations. A separate cross-library kernel wrote 42 in both native and CMake builds.],
   ),
   caption: [Capability demonstrations. These checks did not measure cross-tool build performance or learning outcomes.],
 ) <tab-capabilities>
+
+The repository test suite builds all 13 example projects from fresh copies.
+CI needs the CUDA Toolkit for compilation and device linking. GPU execution
+and graphical launch were checked separately.
 
 The VTE demo is from revision `f2223e45d7f04c5383c59e76772501f0ed4215bc`.
 It exposed two needs shared by GTK applications: generating resources and
@@ -633,13 +681,17 @@ they wrote themselves.
 
 *Scope of the tool.* #easypp targets Linux and Clang. This constrains
 classroom deployment where students use Windows, including programs that
-currently rely on Code::Blocks with a bundled compiler @codeblocks. System
+currently rely on Code::Blocks with a bundled compiler @codeblocks. CUDA
+builds also require NVIDIA's toolkit and select one architecture per project.
+Running CUDA code requires a compatible GPU and driver. System
 dependencies outside Conan still need to be installed separately. Conan adds
 a recoverable package setup path, with a first-run cost and a dependency on
 package and recipe availability. The fixed layout omits per-target flags,
 shared project libraries and installation rules. Module support covers
 project-local imports and standard library manifests supplied by the
-toolchain. External named modules require additional integration.
+toolchain. External named C++ modules require additional integration.
+Named QML support currently covers one module at version 1.0 per executable.
+The Qt runtime modules must be available when the application runs.
 
 *Heuristics.* Include discovery cannot follow macro includes and skips only
 preprocessor branches that it can prove inactive. Dependency scanning gives
@@ -662,8 +714,8 @@ and defaults. It does not measure learning outcomes. The claim that removing bui
 notation improves learning rests on cognitive-load theory @sweller1988 and on the
 failure modes we show. Testing it requires a controlled study in a course: the
 same assignments, one group with CMake and one with #easypp, measuring time to the
-first working multi-library program and the kinds of errors students meet. That
-study is future work.
+first working multi-library program, the kinds of errors students meet, and how
+they explain the role of the linker. That study is future work.
 
 = Conclusion <sec-conclusion>
 
@@ -671,8 +723,8 @@ For a small C++ project, a directory can identify a target and an include
 or import can identify a dependency. In Blockfall, these conventions replace
 25–38 lines of build code and let the library extraction pass without editing
 a second description. Strict defaults reject both beginner mistakes in the
-minimal compiler exercise. The framework, Conan and module examples show how
-the same workflow can extend to later assignments.
+minimal compiler exercise. The framework, Conan, module and CUDA examples
+show how the same workflow can extend to later assignments.
 
 The educational hypothesis is that students can learn translation units,
 libraries and linking before learning build-language syntax. CMake export
