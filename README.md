@@ -240,6 +240,31 @@ recorded in its manifest, so a fresh Conan cache may need network access.
 Use `cargo test -- --include-ignored` to also run the focused integration
 tests that require additional tools.
 
+## ARM64 Linux in QEMU
+
+Install Clang, an ARM64 Linux GCC toolchain and sysroot, and QEMU user-mode
+tools. On Arch Linux the additional packages are `aarch64-linux-gnu-gcc`
+and `qemu-user`. From a project:
+
+```sh
+easypp doctor --target aarch64-linux-gnu
+easypp build --target aarch64-linux-gnu
+easypp run --target aarch64-linux-gnu
+easypp test --target aarch64-linux-gnu
+```
+
+The default sysroot is `/usr/aarch64-linux-gnu`. Pass `--sysroot DIR` to
+use another compatible ARM64 Linux SDK and runtime root. easypp uses that
+root for target `pkg-config` metadata and passes it to QEMU as the guest
+loader prefix. Native and ARM64 outputs and discovery databases are separate.
+`easypp clean --target aarch64-linux-gnu` removes the selected target's
+outputs. Debug cross builds use debug information with sanitizers disabled.
+
+This profile is for hosted Linux C/C++ programs running under QEMU user mode.
+It covers project libraries and SDK packages. Conan, CUDA, C++ modules, Qt/KDE
+code generation, remote debugging, and cross-target CMake export remain
+outside this profile.
+
 ## CUDA
 
 With the NVIDIA CUDA Toolkit and its supported host compiler installed, put

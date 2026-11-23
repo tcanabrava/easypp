@@ -26,7 +26,21 @@ pub fn run(start: &Path, opts: &Options) -> Result<bool, String> {
         ui::error("Missing an archiver. Install llvm-ar or the system binutils package.");
         ok = false;
     }
-    if let Some(debugger) = ["lldb", "gdb"]
+    if let Some(target) = &opts.cross {
+        ui::status(
+            "Target",
+            &format!("{} ({})", crate::cross::TRIPLE, target.sysroot.display()),
+        );
+        match target.emulator() {
+            Ok(emulator) => {
+                ok &= tool(&emulator.to_string_lossy(), "Install QEMU user-mode tools.");
+            }
+            Err(e) => {
+                ui::error(&e);
+                ok = false;
+            }
+        }
+    } else if let Some(debugger) = ["lldb", "gdb"]
         .into_iter()
         .find(|name| system::in_path(name))
     {
@@ -36,7 +50,13 @@ pub fn run(start: &Path, opts: &Options) -> Result<bool, String> {
     }
 
     if clang_cpp {
+        let target_flags: Vec<_> = opts
+            .cross
+            .iter()
+            .flat_map(|target| target.flags().into_iter().chain(target.link_flags()))
+            .collect();
         let mut flags = vec!["-std=c++23"];
+        flags.extend(target_flags.iter().map(String::as_str));
         if opts.sanitizers() {
             flags.push("-fsanitize=address,undefined");
         }
@@ -44,16 +64,27 @@ pub fn run(start: &Path, opts: &Options) -> Result<bool, String> {
             "C++23 standard library and linker",
             &flags,
             "#include <iostream>\nint main() { std::cout << 0; }\n",
-            "Install the C++ development files, linker, and Clang sanitizer runtimes for Debug builds.",
+            if opts.cross.is_some() {
+                "Install ARM64 C++ development files and a cross linker, and check the target sysroot."
+            } else {
+                "Install the C++ development files, linker, and Clang sanitizer runtimes for Debug builds."
+            },
         );
     }
 
     if let Some(root) = root {
         std::env::set_current_dir(&root)
             .map_err(|e| format!("cannot enter {}: {e}", root.display()))?;
-        conan::configure(&root, opts);
-        if root.join("conanfile.txt").is_file() {
-            ok &= check_conan(&root, opts);
+        if opts.cross.is_none() {
+            conan::configure(&root, opts);
+            if root.join("conanfile.txt").is_file() {
+                ok &= check_conan(&root, opts);
+            }
+        } else if root.join("conanfile.txt").is_file() {
+            ui::error(
+                "This cross target does not use Conan dependencies. Install the ARM64 packages in its sysroot.",
+            );
+            ok = false;
         }
 
         let packages = RefCell::new(BTreeSet::new());
@@ -109,9 +140,16 @@ pub fn run(start: &Path, opts: &Options) -> Result<bool, String> {
             ok = false;
         }
         if openmp.get() && clang_cpp {
+            let mut flags = vec!["-fopenmp"];
+            let cross_flags: Vec<_> = opts
+                .cross
+                .iter()
+                .flat_map(|target| target.flags().into_iter().chain(target.link_flags()))
+                .collect();
+            flags.extend(cross_flags.iter().map(String::as_str));
             ok &= probe(
                 "OpenMP headers and runtime",
-                &["-fopenmp"],
+                &flags,
                 "#include <omp.h>\nint main() { return omp_get_max_threads() < 1; }\n",
                 "Install the OpenMP development package for Clang (libomp).",
             );

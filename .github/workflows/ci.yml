@@ -16,7 +16,8 @@ jobs:
           pacman -Syu --noconfirm --needed \
             git rust clang gcc lld lldb openmp pkgconf cmake ninja cuda \
             zlib sdl2-compat gtk4 boost qt6-base qt6-declarative gtest catch2 \
-            libkdegames kcrash kdbusaddons kiconthemes vte4 fmt pcre2 python-pipx
+            libkdegames kcrash kdbusaddons kiconthemes vte4 fmt pcre2 python-pipx \
+            aarch64-linux-gnu-gcc qemu-user
           /opt/cuda/bin/nvcc --version
           echo /opt/cuda/bin >> "$GITHUB_PATH"
 

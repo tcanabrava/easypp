@@ -141,6 +141,81 @@ fn have(tool: &str) -> bool {
 }
 
 #[test]
+fn arm64_linux_build_run_and_tests_use_qemu() {
+    if !have("aarch64-linux-gnu-g++")
+        || !Path::new("/usr/aarch64-linux-gnu").is_dir()
+        || !(have("qemu-aarch64") || have("qemu-aarch64-static"))
+    {
+        return;
+    }
+    let p = Project::new("qemu-arm64");
+    p.remove("src");
+    p.write("src/libs/sum/sum.h", "#pragma once\n#ifdef __cplusplus\nextern \"C\" {\n#endif\nint sum(int left, int right);\n#ifdef __cplusplus\n}\n#endif\n");
+    p.write(
+        "src/libs/sum/sum.c",
+        "#include \"sum.h\"\nint sum(int left, int right) { return left + right; }\n",
+    );
+    p.write(
+        "src/bin/check.cpp",
+        r#"
+#include "sum/sum.h"
+#include <iostream>
+#include <string_view>
+int main(int argc, char** argv) {
+    if (argc != 2 || std::string_view(argv[1]) != "passed through") return 1;
+#ifdef __aarch64__
+    std::cout << "ARM64 " << sum(19, 23) << '\n';
+#else
+    std::cout << "host " << sum(19, 23) << '\n';
+#endif
+}
+"#,
+    );
+    p.write("src/tests/target_test.cpp", "#include \"sum/sum.h\"\nint main() {\n#ifdef __aarch64__\nreturn sum(19, 23) != 42;\n#else\nreturn 1;\n#endif\n}\n");
+    assert!(
+        p.ok(&["doctor", "--target", "aarch64-linux-gnu"])
+            .contains("qemu-aarch64")
+    );
+    assert!(!p.exists("build"));
+    assert!(
+        p.ok(&[
+            "run",
+            "--target",
+            "aarch64-linux-gnu",
+            "--",
+            "passed through"
+        ])
+        .contains("ARM64 42")
+    );
+    assert!(
+        p.ok(&["test", "--target", "aarch64-linux-gnu"])
+            .contains("1 passed")
+    );
+    assert!(
+        !p.ok(&["build", "--target", "aarch64-linux-gnu"])
+            .contains("Compiling")
+    );
+    let native = if std::env::consts::ARCH == "aarch64" {
+        "ARM64 42"
+    } else {
+        "host 42"
+    };
+    assert!(p.ok(&["run", "--", "passed through"]).contains(native));
+    assert!(
+        p.ok(&[
+            "run",
+            "--target",
+            "aarch64-linux-gnu",
+            "--",
+            "passed through"
+        ])
+        .contains("ARM64 42")
+    );
+    p.ok(&["clean", "--target", "aarch64-linux-gnu"]);
+    assert!(p.exists("build/debug/bin/check"));
+}
+
+#[test]
 fn doctor_checks_the_toolchain_inside_and_outside_projects() {
     let standalone = Project::temporary("doctor-standalone");
     fs::create_dir(&standalone.dir).unwrap();

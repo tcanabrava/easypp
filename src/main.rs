@@ -3,6 +3,7 @@ mod cache;
 mod cli;
 mod conan;
 mod cond;
+mod cross;
 mod cuda;
 mod doctor;
 mod export;
@@ -56,7 +57,7 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
     };
-    let opts = build.into();
+    let opts = Options::try_from(build)?;
     match &action {
         Actions::New { name } => {
             scaffold::new_project(Path::new(name))?;
@@ -84,7 +85,18 @@ fn run() -> Result<ExitCode, String> {
     let root = project::find_root(&invoked_from)?;
     std::env::set_current_dir(&root).map_err(|e| e.to_string())?;
 
-    conan::configure(&root, &opts);
+    if opts.cross.is_some() {
+        match action {
+            Actions::Debug(_) => return Err("Cross-target debugging needs QEMU's remote debugger. Use easypp run or test with this target.".into()),
+            Actions::ExportCmake { .. } => return Err("CMake export for cross targets requires a target toolchain file. Build this target with easypp.".into()),
+            Actions::CudaArch { .. } | Actions::Deps { .. } => return Err("This command is unavailable for the ARM64 Linux target.".into()),
+            _ => {}
+        }
+    }
+
+    if opts.cross.is_none() {
+        conan::configure(&root, &opts);
+    }
     match action {
         Actions::Deps { action } => {
             let (references, args) = match action {
@@ -98,11 +110,12 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Actions::Clean => {
-            if Path::new(builder::BUILD_DIR).exists() {
-                std::fs::remove_dir_all(builder::BUILD_DIR)
-                    .map_err(|e| format!("cannot remove build/: {e}"))?;
+            let build = opts.cache_dir();
+            if build.exists() {
+                std::fs::remove_dir_all(&build)
+                    .map_err(|e| format!("cannot remove {}: {e}", build.display()))?;
             }
-            ui::status("Removed", "build/");
+            ui::status("Removed", &format!("{}/", build.display()));
             return Ok(ExitCode::SUCCESS);
         }
         Actions::Watch => watch::run(&root, &opts),
@@ -116,10 +129,12 @@ fn run() -> Result<ExitCode, String> {
         _ => {}
     }
 
-    if matches!(
-        action,
-        Actions::Build | Actions::Run(_) | Actions::Debug(_) | Actions::Test(_)
-    ) {
+    if opts.cross.is_none()
+        && matches!(
+            action,
+            Actions::Build | Actions::Run(_) | Actions::Debug(_) | Actions::Test(_)
+        )
+    {
         conan::ensure_installed(&root, &opts)?;
     }
     let project = load_project(&root, &opts)?;
@@ -155,7 +170,7 @@ fn run() -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Actions::Info => {
-            print_info(&project);
+            print_info(&project, &opts);
             Ok(ExitCode::SUCCESS)
         }
         _ => unreachable!(),
@@ -165,9 +180,13 @@ fn run() -> Result<ExitCode, String> {
 /// Discovers the project at `root` (the current directory), using the cache
 /// unless disabled. The cache is released before returning.
 pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Project, String> {
-    conan::require_installed(root, opts)?;
+    if opts.cross.is_none() {
+        conan::require_installed(root, opts)?;
+    } else if root.join("conanfile.txt").is_file() {
+        return Err("This cross target does not use Conan dependencies. Install the ARM64 packages in its sysroot.".into());
+    }
     let mut cache = if opts.cache {
-        match cache::Cache::open(Path::new(builder::BUILD_DIR)) {
+        match cache::Cache::open(&opts.cache_dir()) {
             Ok(cache) => Some(cache),
             Err(e) => {
                 ui::warn(&format!(
@@ -191,9 +210,15 @@ pub fn load_project(root: &Path, opts: &builder::Options) -> Result<project::Pro
     if opts.verbose {
         match &cache {
             Some(c) if c.redetected() => {
-                eprintln!("cache: detected the system, saved to build/easypp.db")
+                eprintln!(
+                    "cache: detected the system, saved to {}",
+                    opts.cache_dir().join("easypp.db").display()
+                )
             }
-            Some(_) => eprintln!("cache: system and include lists from build/easypp.db"),
+            Some(_) => eprintln!(
+                "cache: system and include lists from {}",
+                opts.cache_dir().join("easypp.db").display()
+            ),
             None => eprintln!("cache: not used"),
         }
     }
@@ -306,7 +331,7 @@ fn run_bin(
         "Running",
         &builder::exe_path(opts, target).display().to_string(),
     );
-    let mut command = Command::new(&exe);
+    let mut command = cross::command(opts.cross.as_ref(), &exe)?;
     runtime_data(&mut command, project);
     command.args(&args.args).current_dir(invoked_from);
     let qml = target.system.iter().any(|dep| {
@@ -351,6 +376,7 @@ fn run_tests(project: &Project, opts: &Options, args: &TestArgs) -> Result<ExitC
         &project.root,
         opts.jobs,
         Duration::from_secs(args.timeout),
+        opts.cross.as_ref(),
     )?;
     Ok(if passed {
         ExitCode::SUCCESS
@@ -366,7 +392,7 @@ fn exit_code(status: std::process::ExitStatus) -> ExitCode {
     }
 }
 
-fn print_info(project: &Project) {
+fn print_info(project: &Project, opts: &Options) {
     let list = |v: &[String]| {
         if v.is_empty() {
             "-".to_string()
@@ -375,6 +401,13 @@ fn print_info(project: &Project) {
         }
     };
     println!("project: {}\n", project.root.display());
+    if let Some(target) = &opts.cross {
+        println!(
+            "target: {} (sysroot {})\n",
+            cross::TRIPLE,
+            target.sysroot.display()
+        );
+    }
     if let Some(cuda) = &project.cuda {
         println!(
             "CUDA architecture: {}\n",

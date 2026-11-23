@@ -250,8 +250,8 @@ pub fn discover_with_header_checks(
     let index = cache.as_mut().map(|c| c.take_index()).unwrap_or_default();
     let resolver = Resolver::new(&libs, &system_includes, index);
     let system = match cache.as_mut() {
-        Some(c) => c.system(),
-        None => System::detect(),
+        Some(c) => c.system(opts.cross.as_ref()),
+        None => System::detect(opts.cross.as_ref()),
     };
 
     for lib in libs.values_mut().filter(|lib| lib.third_party) {
@@ -391,6 +391,11 @@ pub fn discover_with_header_checks(
         .chain(bins.iter().chain(&tests).map(|t| (t.name.as_str(), &t.qt)))
         .filter(|(_, q)| q.needs_qt())
         .collect();
+    if opts.cross.is_some() && !needs_qt.is_empty() {
+        return Err(
+            "Qt and KDE code generation are not available for the ARM64 QEMU target.".into(),
+        );
+    }
     for (_, files) in &needs_qt {
         for config in &files.kconfig {
             qt::kconfig_schema(config)?;
@@ -434,7 +439,12 @@ pub fn discover_with_header_checks(
             .iter()
             .chain(&tests)
             .any(|target| target.system.contains(&SysDep::CudaRuntime)))
-    .then(crate::cuda::Toolkit::discover)
+    .then(|| {
+        if opts.cross.is_some() {
+            return Err("CUDA builds are not available for the ARM64 QEMU target.".into());
+        }
+        crate::cuda::Toolkit::discover()
+    })
     .transpose()?;
     if let Some(cuda) = &cuda
         && !system_includes.contains(&cuda.include)

@@ -129,7 +129,7 @@ impl Snapshot {
     pub fn detect() -> Snapshot {
         let mut include_dirs: Vec<PathBuf> = Vec::new();
         for lang in ["c++", "c"] {
-            for dir in compiler_include_dirs(lang) {
+            for dir in compiler_include_dirs(lang, &[]) {
                 if !include_dirs.contains(&dir) {
                     include_dirs.push(dir);
                 }
@@ -178,6 +178,102 @@ impl Snapshot {
         let tracked = crate::kde::packages(&snapshot.lib_dirs, &mut snapshot.packages);
         snapshot.pc_dirs.extend(tracked);
         snapshot
+    }
+
+    fn detect_cross(target: &crate::cross::Target) -> Self {
+        let flags = target.flags();
+        let mut include_dirs = compiler_include_dirs("c++", &flags);
+        for dir in compiler_include_dirs("c", &flags) {
+            if !include_dirs.contains(&dir) {
+                include_dirs.push(dir);
+            }
+        }
+        let output = Command::new("clang")
+            .args(&flags)
+            .arg("-print-search-dirs")
+            .output()
+            .ok();
+        let lib_dirs = output
+            .as_ref()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout))
+            .and_then(|text| {
+                let path = text
+                    .lines()
+                    .find_map(|line| line.strip_prefix("libraries: ="))?;
+                Some(existing(
+                    path.split(':')
+                        .map(PathBuf::from)
+                        .filter_map(|p| p.canonicalize().ok())
+                        .filter(|p| p.starts_with(&target.sysroot)),
+                ))
+            })
+            .unwrap_or_default();
+        let pc_dirs = target.pkg_config_dirs();
+        let mut snapshot = Self {
+            builtin_dirs: include_dirs
+                .iter()
+                .filter(|dir| {
+                    !dir.starts_with(&target.sysroot)
+                        || dir
+                            .components()
+                            .any(|component| component.as_os_str() == "c++")
+                })
+                .cloned()
+                .collect(),
+            include_dirs,
+            default_lib_dirs: lib_dirs.clone(),
+            lib_dirs,
+            packages: Vec::new(),
+            pc_dirs,
+            // Store the resolved target flags in the snapshot. Do not query
+            // the host pkg-config or fall back to unexpanded target .pc files.
+            pkg_config: false,
+        };
+        if in_path("pkg-config") {
+            snapshot.load_target_packages(target);
+        }
+        snapshot
+    }
+
+    fn load_target_packages(&mut self, target: &crate::cross::Target) {
+        let names: BTreeSet<_> = self
+            .pc_dirs
+            .iter()
+            .filter_map(|dir| fs::read_dir(dir).ok())
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "pc"))
+            .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
+            .collect();
+        for name in names {
+            let query = |flag: &str| {
+                let out = target
+                    .pkg_config(&self.pc_dirs)
+                    .args([flag, name.as_str()])
+                    .output()
+                    .ok()?;
+                out.status
+                    .success()
+                    .then(|| split_flags(&String::from_utf8_lossy(&out.stdout)))
+            };
+            let (Some(cflags), Some(libs)) = (query("--cflags"), query("--libs")) else {
+                continue;
+            };
+            let include_dirs = cflags
+                .iter()
+                .filter_map(|flag| flag.strip_prefix("-I"))
+                .map(PathBuf::from)
+                .filter(|path| !self.include_dirs.contains(path))
+                .collect();
+            self.packages.push(Package {
+                name,
+                include_dirs,
+                cflags,
+                libs,
+            });
+        }
     }
 
     /// Cheap to compute: the tools' and folders' modification times. Installing
@@ -246,8 +342,9 @@ impl Snapshot {
 
 impl System {
     /// Asks the compiler and pkg-config from scratch.
-    pub fn detect() -> System {
-        System::new(Snapshot::detect(), HashMap::new(), HashMap::new())
+    pub fn detect(cross: Option<&crate::cross::Target>) -> System {
+        let snapshot = cross.map_or_else(Snapshot::detect, Snapshot::detect_cross);
+        System::new(snapshot, HashMap::new(), HashMap::new())
     }
 
     /// Builds the lookup state from a snapshot and previously resolved answers.
@@ -700,8 +797,9 @@ fn existing(dirs: impl Iterator<Item = PathBuf>) -> Vec<PathBuf> {
 }
 
 /// The `#include <...>` search list clang uses for `lang` ("c" or "c++").
-fn compiler_include_dirs(lang: &str) -> Vec<PathBuf> {
+fn compiler_include_dirs(lang: &str, flags: &[String]) -> Vec<PathBuf> {
     let Ok(out) = Command::new("clang")
+        .args(flags)
         .args(["-E", "-x", lang, "-", "-v"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

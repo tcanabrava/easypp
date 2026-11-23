@@ -2,6 +2,7 @@ use crate::builder;
 use clap::{Args, Parser, Subcommand, value_parser};
 use std::ffi::OsString;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -35,11 +36,23 @@ pub struct BuildArgs {
     /// Disable AddressSanitizer and UBSan in Debug builds.
     #[arg(long, global = true)]
     no_sanitize: bool,
+    /// Cross-compile for ARM64 Linux and use QEMU for run and test.
+    #[arg(long, global = true, value_parser = [crate::cross::TRIPLE])]
+    target: Option<String>,
+    /// ARM64 Linux SDK and QEMU runtime root (default: /usr/aarch64-linux-gnu).
+    #[arg(long, global = true, requires = "target", value_name = "DIR")]
+    sysroot: Option<PathBuf>,
 }
 
-impl From<BuildArgs> for builder::Options {
-    fn from(args: BuildArgs) -> Self {
-        Self {
+impl TryFrom<BuildArgs> for builder::Options {
+    type Error = String;
+
+    fn try_from(args: BuildArgs) -> Result<Self, String> {
+        let cross = args
+            .target
+            .map(|_| crate::cross::Target::new(args.sysroot))
+            .transpose()?;
+        Ok(Self {
             release: args.release,
             jobs: args
                 .jobs
@@ -48,7 +61,8 @@ impl From<BuildArgs> for builder::Options {
             verbose: args.verbose,
             cache: !args.no_cache,
             sanitize: !args.no_sanitize,
-        }
+            cross,
+        })
     }
 }
 

@@ -102,11 +102,12 @@ pub struct Options {
     pub cache: bool,
     /// AddressSanitizer + UndefinedBehaviorSanitizer in debug builds.
     pub sanitize: bool,
+    pub cross: Option<crate::cross::Target>,
 }
 
 impl Options {
     pub fn sanitizers(&self) -> bool {
-        !self.release && self.sanitize
+        !self.release && self.sanitize && self.cross.is_none()
     }
 
     pub fn profile(&self) -> &'static str {
@@ -114,7 +115,13 @@ impl Options {
     }
 
     fn dir(&self) -> PathBuf {
-        Path::new(BUILD_DIR).join(self.profile())
+        self.cache_dir().join(self.profile())
+    }
+
+    pub fn cache_dir(&self) -> PathBuf {
+        self.cross
+            .as_ref()
+            .map_or_else(|| BUILD_DIR.into(), crate::cross::Target::build_dir)
     }
 }
 
@@ -374,6 +381,10 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         let any_cuda = target.system.contains(&crate::system::SysDep::CudaRuntime);
         let any_cpp = any_cuda || sources.any(|s| Lang::of(s) == Some(Lang::Cpp));
         let mut cmd = vec![driver(if any_cpp { Lang::Cpp } else { Lang::C }).to_string()];
+        if let Some(target) = &opts.cross {
+            cmd.extend(target.flags());
+            cmd.extend(target.link_flags());
+        }
         cmd.extend(objects.iter().chain(&archives).map(|p| path_str(p)));
         cmd.extend(target.link_flags.iter().cloned());
         if let Some(runtime) = &device_runtime {
@@ -1025,6 +1036,9 @@ pub(crate) fn source_flags(
         (Lang::Cuda, _) => "-std=c++20",
     };
     let mut cmd: Vec<String> = vec![driver(lang).into(), std.into()];
+    if let Some(target) = &opts.cross {
+        cmd.extend(target.flags());
+    }
     if third_party {
         cmd.push("-w".into());
     } else if lang == Lang::Cuda {

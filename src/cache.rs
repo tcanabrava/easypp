@@ -278,7 +278,7 @@ impl Cache {
 
     /// The system description: from the cache when its fingerprint still
     /// matches, otherwise detected again.
-    pub fn system(&mut self) -> System {
+    pub fn system(&mut self, cross: Option<&crate::cross::Target>) -> System {
         if let Some((fingerprint, snapshot)) = self.stored.take()
             && snapshot.fingerprint() == fingerprint
         {
@@ -294,7 +294,7 @@ impl Cache {
         self.stored = None;
         self.headers.clear();
         self.flags.clear();
-        System::detect()
+        System::detect(cross)
     }
 
     pub fn take_index(&mut self) -> IncludeIndex {
@@ -492,7 +492,7 @@ mod tests {
         let (fingerprint, stored) = cache.stored.clone().unwrap();
         assert_eq!(stored, snapshot);
         assert_eq!(fingerprint, snapshot.fingerprint());
-        let loaded = cache.system();
+        let loaded = cache.system(None);
         assert!(!cache.redetected());
         assert_eq!(loaded.answers().0, headers);
         fs::remove_dir_all(dir).unwrap();

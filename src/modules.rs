@@ -73,6 +73,11 @@ impl Modules {
                 graph.units.insert(path, unit);
             }
         }
+        if opts.cross.is_some() && !graph.units.is_empty() {
+            return Err(
+                "C++ modules and header units are not available for the ARM64 QEMU target.".into(),
+            );
+        }
         graph.add_standard_modules()?;
         let mut active = BTreeSet::new();
         for path in graph.units.keys() {

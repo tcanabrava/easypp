@@ -4,7 +4,7 @@
 use crate::ui;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,7 @@ pub fn run(
     root: &Path,
     jobs: usize,
     timeout: Duration,
+    cross: Option<&crate::cross::Target>,
 ) -> std::result::Result<bool, String> {
     let s = if tests.len() == 1 { "" } else { "s" };
     eprintln!("\nrunning {} test{s}", tests.len());
@@ -49,7 +50,7 @@ pub fn run(
                     let Some(test) = queue.lock().unwrap().next() else {
                         break;
                     };
-                    match run_one(test, args, root, timeout) {
+                    match run_one(test, args, root, timeout, cross) {
                         Ok(result) => {
                             let label = match result.outcome {
                                 Outcome::Passed => ui::green("ok"),
@@ -108,9 +109,10 @@ fn run_one(
     args: &[String],
     root: &Path,
     timeout: Duration,
+    cross: Option<&crate::cross::Target>,
 ) -> std::result::Result<Result, String> {
     let start = Instant::now();
-    let mut child = Command::new(&test.exe)
+    let mut child = crate::cross::command(cross, &test.exe)?
         .args(args)
         .current_dir(root)
         .stdin(Stdio::null())
