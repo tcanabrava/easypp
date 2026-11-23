@@ -244,9 +244,10 @@ tests that require additional tools.
 
 Install Clang, an ARM64 Linux GCC toolchain and sysroot, and QEMU user-mode
 tools. On Arch Linux the additional packages are `aarch64-linux-gnu-gcc`
-and `qemu-user`. From a project:
+and `qemu-user`. Try the standard-library-only [C++ example](examples/qemu-cpp):
 
 ```sh
+cd examples/qemu-cpp
 easypp doctor --target aarch64-linux-gnu
 easypp build --target aarch64-linux-gnu
 easypp run --target aarch64-linux-gnu

@@ -140,12 +140,15 @@ fn have(tool: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+fn have_arm64_qemu() -> bool {
+    have("aarch64-linux-gnu-g++")
+        && Path::new("/usr/aarch64-linux-gnu").is_dir()
+        && (have("qemu-aarch64") || have("qemu-aarch64-static"))
+}
+
 #[test]
 fn arm64_linux_build_run_and_tests_use_qemu() {
-    if !have("aarch64-linux-gnu-g++")
-        || !Path::new("/usr/aarch64-linux-gnu").is_dir()
-        || !(have("qemu-aarch64") || have("qemu-aarch64-static"))
-    {
+    if !have_arm64_qemu() {
         return;
     }
     let p = Project::new("qemu-arm64");
@@ -213,6 +216,25 @@ int main(int argc, char** argv) {
     );
     p.ok(&["clean", "--target", "aarch64-linux-gnu"]);
     assert!(p.exists("build/debug/bin/check"));
+}
+
+#[test]
+fn qemu_cpp_example_runs_and_passes_its_test_on_arm64() {
+    if !have_arm64_qemu() {
+        return;
+    }
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/qemu-cpp");
+    let project = Project::copy_example(&example);
+    assert!(
+        project
+            .ok(&["run", "--target", "aarch64-linux-gnu"])
+            .contains("ARM64 checksum: 42")
+    );
+    assert!(
+        project
+            .ok(&["test", "--target", "aarch64-linux-gnu"])
+            .contains("1 passed")
+    );
 }
 
 #[test]
