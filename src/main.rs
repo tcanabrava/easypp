@@ -148,7 +148,7 @@ fn run() -> Result<ExitCode, String> {
         Actions::Run(args) => run_bin(&project, &opts, &args, &invoked_from),
         Actions::Debug(args) => debug_bin(&project, &opts, &args, &invoked_from),
         Actions::ExportCmake { force } => {
-            export::write(&project, force)?;
+            export::write(&project, force, opts.shared)?;
             ui::status("Wrote", "CMakeLists.txt");
             eprintln!(
                 "\n    cmake -S . -B build-cmake -G Ninja && cmake --build build-cmake && ctest --test-dir build-cmake\n"

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-pub fn write(project: &Project, force: bool) -> Result<(), String> {
+pub fn write(project: &Project, force: bool, shared: bool) -> Result<(), String> {
     if project.modules.has_header_units() {
         return Err(
             "CMake export does not support C++ header units. Build this project with easypp."
@@ -20,7 +20,8 @@ pub fn write(project: &Project, force: bool) -> Result<(), String> {
     if path.exists() && !force {
         return Err("CMakeLists.txt already exists; use --force to replace it".into());
     }
-    std::fs::write(&path, cmake(project)).map_err(|e| format!("cannot write CMakeLists.txt: {e}"))
+    std::fs::write(&path, cmake(project, shared))
+        .map_err(|e| format!("cannot write CMakeLists.txt: {e}"))
 }
 
 /// What a system dependency is called in CMake.
@@ -55,7 +56,7 @@ fn path(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-fn cmake(project: &Project) -> String {
+fn cmake(project: &Project, shared: bool) -> String {
     let name = project.root.file_name().map_or("project".into(), |n| {
         n.to_string_lossy()
             .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
@@ -276,7 +277,13 @@ endif()
     }
 
     for name in &project.lib_order {
-        library(w, project, project.libs.get(name).unwrap(), &lib_target);
+        library(
+            w,
+            project,
+            project.libs.get(name).unwrap(),
+            &lib_target,
+            shared,
+        );
     }
 
     if !project.tests.is_empty() {
@@ -335,7 +342,13 @@ fn autogen_sources(files: &crate::qt::QtFiles) -> impl Iterator<Item = String> {
         .map(path)
 }
 
-fn library(w: &mut String, project: &Project, lib: &Library, names: &BTreeMap<&str, String>) {
+fn library(
+    w: &mut String,
+    project: &Project,
+    lib: &Library,
+    names: &BTreeMap<&str, String>,
+    shared: bool,
+) {
     let target = &names[lib.name.as_str()];
     let (mut sources, modules) = module_sources(project, &lib.sources);
     kconfig_sources(w, &lib.qt, target, &mut sources);
@@ -369,7 +382,8 @@ fn library(w: &mut String, project: &Project, lib: &Library, names: &BTreeMap<&s
             );
         }
     } else {
-        let _ = writeln!(w, "add_library({target} STATIC {})", list(sources));
+        let kind = if shared { "SHARED" } else { "STATIC" };
+        let _ = writeln!(w, "add_library({target} {kind} {})", list(sources));
         export_modules(w, target, "PUBLIC", modules);
         if target != &lib.name {
             let _ = writeln!(

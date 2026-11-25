@@ -36,12 +36,21 @@ pub struct BuildArgs {
     /// Disable AddressSanitizer and UBSan in Debug builds.
     #[arg(long, global = true)]
     no_sanitize: bool,
+    /// Build project libraries as static archives or shared objects.
+    #[arg(long, global = true, default_value = "static", value_enum)]
+    linkage: Linkage,
     /// Cross-compile for ARM64 Linux and use QEMU for run and test.
     #[arg(long, global = true, value_parser = [crate::cross::TRIPLE])]
     target: Option<String>,
     /// ARM64 Linux SDK and QEMU runtime root (default: /usr/aarch64-linux-gnu).
     #[arg(long, global = true, requires = "target", value_name = "DIR")]
     sysroot: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Linkage {
+    Static,
+    Shared,
 }
 
 impl TryFrom<BuildArgs> for builder::Options {
@@ -61,6 +70,7 @@ impl TryFrom<BuildArgs> for builder::Options {
             verbose: args.verbose,
             cache: !args.no_cache,
             sanitize: !args.no_sanitize,
+            shared: matches!(args.linkage, Linkage::Shared),
             cross,
         })
     }

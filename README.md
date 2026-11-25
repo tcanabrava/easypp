@@ -42,8 +42,9 @@ Release profile.
 
 ## How it works
 
-- **Libraries**: every folder in `src/libs/` is a static library made of all the
-  `.c`/`.cpp` files inside it. A folder without sources is header-only.
+- **Libraries**: every folder in `src/libs/` is a library made of its source
+  files. Libraries are static by default. A folder with only headers produces
+  no library file.
 - **Linking**: easypp reads the `#include`s. When `first_exec.cpp` includes
   `"static_lib1/lib1_header.hpp"`, it links `static_lib1`, plus whatever
   `static_lib1` includes from other libraries, in the right static-link order.
@@ -196,6 +197,26 @@ Release profile.
   redone when clang, pkg-config, `PKG_CONFIG_PATH` or any include, library or
   pkg-config folder changes. `--no-cache` ignores the cache, and `easypp clean`
   deletes it.
+
+## Shared libraries
+
+Use the same source layout and includes for static and shared builds. On Linux,
+`--linkage shared` builds project libraries as `.so` files. It uses
+position-independent code and records relative runtime search paths so programs
+and tests can find their libraries from any working directory.
+
+```sh
+easypp build                          # static archives in build/debug/lib/
+easypp build --linkage shared         # shared objects in build/shared/debug/lib/
+easypp run --linkage shared
+easypp test --linkage shared
+```
+
+Build both ways to produce both variants. The flag also works with
+`--release`, the ARM64 Linux target, and `export-cmake`. Use
+`easypp clean --linkage shared` to remove just the shared build for the
+selected target. Plain `easypp clean` removes the entire `build/` tree.
+CUDA projects currently use static linkage.
 
 ## Conan packages
 

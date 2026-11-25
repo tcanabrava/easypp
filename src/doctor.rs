@@ -17,14 +17,16 @@ pub fn run(start: &Path, opts: &Options) -> Result<bool, String> {
     let clang = tool("clang", "Install Clang and put clang on PATH.");
     let clang_cpp = tool("clang++", "Install Clang and put clang++ on PATH.");
     let mut ok = clang && clang_cpp;
-    if let Some(ar) = ["llvm-ar", "ar"]
-        .into_iter()
-        .find(|name| system::in_path(name))
-    {
-        ok &= tool(ar, "Install llvm-ar or the system binutils package.");
-    } else {
-        ui::error("Missing an archiver. Install llvm-ar or the system binutils package.");
-        ok = false;
+    if !opts.shared {
+        if let Some(ar) = ["llvm-ar", "ar"]
+            .into_iter()
+            .find(|name| system::in_path(name))
+        {
+            ok &= tool(ar, "Install llvm-ar or the system binutils package.");
+        } else {
+            ui::error("Missing an archiver. Install llvm-ar or the system binutils package.");
+            ok = false;
+        }
     }
     if let Some(target) = &opts.cross {
         ui::status(

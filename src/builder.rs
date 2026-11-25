@@ -102,6 +102,7 @@ pub struct Options {
     pub cache: bool,
     /// AddressSanitizer + UndefinedBehaviorSanitizer in debug builds.
     pub sanitize: bool,
+    pub shared: bool,
     pub cross: Option<crate::cross::Target>,
 }
 
@@ -119,9 +120,17 @@ impl Options {
     }
 
     pub fn cache_dir(&self) -> PathBuf {
-        self.cross
+        let dir = self
+            .cross
             .as_ref()
-            .map_or_else(|| BUILD_DIR.into(), crate::cross::Target::build_dir)
+            .map_or_else(|| BUILD_DIR.into(), crate::cross::Target::build_dir);
+        if self.shared {
+            Path::new(BUILD_DIR)
+                .join("shared")
+                .join(dir.strip_prefix(BUILD_DIR).unwrap())
+        } else {
+            dir
+        }
     }
 }
 
@@ -140,6 +149,12 @@ struct Component {
     /// System flags plus the generated-file folders on the include path.
     cflags: Vec<String>,
     plan: qt::Plan,
+}
+
+impl Component {
+    fn produces_library(&self, opts: &Options) -> bool {
+        !self.sources.is_empty() || (opts.shared && !self.resources.is_empty())
+    }
 }
 
 fn gen_dir(opts: &Options, key: &str) -> PathBuf {
@@ -401,14 +416,19 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
             ),
     )?;
 
-    // 3. One static archive per library that has objects.
+    // 3. Build libraries with dependencies before dependents.
     let ar = if crate::system::in_path("llvm-ar") {
         "llvm-ar"
     } else {
         "ar"
     };
-    for (name, lib) in libs {
-        if lib.sources.is_empty() {
+    for name in &project.lib_order {
+        let lib = &libs[name.as_str()];
+        if !lib.produces_library(opts) {
+            continue;
+        }
+        if opts.shared {
+            link_shared_library(project, opts, &plan, name)?;
             continue;
         }
         let archive = archive_path(opts, name);
@@ -431,17 +451,21 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
             .sources
             .iter()
             .chain(&own.resources)
-            .chain(used.iter().flat_map(|l| l.resources.iter()))
+            .chain(
+                used.iter()
+                    .filter(|_| !opts.shared)
+                    .flat_map(|l| l.resources.iter()),
+            )
             .map(|s| object_path(opts, s))
             .collect();
         if opts.sanitizers() {
             objects.push(object_path(opts, &sanitizer_defaults_source(opts)));
         }
-        let archives: Vec<PathBuf> = target
+        let libraries: Vec<PathBuf> = target
             .libs
             .iter()
-            .filter(|n| !libs[n.as_str()].sources.is_empty())
-            .map(|n| archive_path(opts, n))
+            .filter(|n| libs[n.as_str()].produces_library(opts))
+            .map(|n| library_path(opts, n))
             .collect();
         let device_runtime = if project.target_has_cuda_sources(target) {
             let cuda = project.cuda.as_ref().expect("discovered CUDA toolkit");
@@ -457,7 +481,11 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         let standard_modules: BTreeSet<&Path> = project.modules.required_standard_sources(
             own.sources
                 .iter()
-                .chain(used.iter().flat_map(|lib| lib.sources.iter()))
+                .chain(
+                    used.iter()
+                        .filter(|_| !opts.shared)
+                        .flat_map(|lib| lib.sources.iter()),
+                )
                 .map(PathBuf::as_path),
         );
         objects.extend(standard_modules.iter().map(|path| object_path(opts, path)));
@@ -472,7 +500,11 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         if let Some(target) = &opts.cross {
             cmd.extend(target.link_flags());
         }
-        cmd.extend(objects.iter().chain(&archives).map(|p| path_str(p)));
+        cmd.extend(objects.iter().map(|p| path_str(p)));
+        if opts.shared && !libraries.is_empty() {
+            cmd.push("-Wl,-rpath,$ORIGIN/../lib".into());
+        }
+        append_libraries(&mut cmd, &libraries, opts.shared);
         cmd.extend(target.link_flags.iter().cloned());
         if let Some(runtime) = &device_runtime {
             cmd.push(path_str(runtime));
@@ -495,7 +527,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
 
         let inputs: Vec<PathBuf> = objects
             .into_iter()
-            .chain(archives)
+            .chain(libraries)
             .chain(device_runtime)
             .collect();
         if !up_to_date(&exe, &cmd, &inputs) {
@@ -526,6 +558,74 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
             start.elapsed().as_secs_f64()
         ),
     );
+    Ok(())
+}
+
+fn append_libraries(cmd: &mut Vec<String>, libraries: &[PathBuf], shared: bool) {
+    if shared && !libraries.is_empty() {
+        // Libraries can register resources at startup without exporting a used symbol.
+        cmd.push("-Wl,--push-state,--no-as-needed".into());
+    }
+    cmd.extend(libraries.iter().map(|path| path_str(path)));
+    if shared && !libraries.is_empty() {
+        cmd.push("-Wl,--pop-state".into());
+    }
+}
+
+fn link_shared_library(
+    project: &Project,
+    opts: &Options,
+    plan: &BuildPlan<'_>,
+    name: &str,
+) -> Result<(), String> {
+    let lib = &project.libs[name];
+    let component = &plan.libs[name];
+    let sources = component.sources.iter().chain(&component.resources);
+    let standard = project
+        .modules
+        .required_standard_sources(sources.clone().map(PathBuf::as_path));
+    let lang =
+        if sources.clone().any(|src| Lang::of(src) == Some(Lang::Cpp)) || !standard.is_empty() {
+            Lang::Cpp
+        } else {
+            Lang::C
+        };
+    let objects: Vec<_> = sources
+        .map(PathBuf::as_path)
+        .chain(standard)
+        .map(|src| object_path(opts, src))
+        .collect();
+    let mut dependencies = Vec::new();
+    for dep in &lib.closure {
+        if plan.libs[dep.as_str()].produces_library(opts) {
+            dependencies.push(library_path(opts, dep));
+        }
+    }
+
+    let output = library_path(opts, name);
+    let mut cmd = vec![driver(lang).into(), "-shared".into()];
+    if let Some(target) = &opts.cross {
+        cmd.extend(target.link_flags());
+    }
+    cmd.extend([
+        "-Xlinker".into(),
+        "-soname".into(),
+        "-Xlinker".into(),
+        output.file_name().unwrap().to_string_lossy().into_owned(),
+        "-Wl,-rpath,$ORIGIN".into(),
+    ]);
+    cmd.extend(objects.iter().map(|path| path_str(path)));
+    append_libraries(&mut cmd, &dependencies, true);
+    cmd.extend(lib.link_flags.iter().cloned());
+    if opts.sanitizers() {
+        cmd.extend(SANITIZE.map(String::from));
+    }
+    cmd.extend(["-o".into(), path_str(&output)]);
+    let inputs: Vec<_> = objects.into_iter().chain(dependencies).collect();
+    if !up_to_date(&output, &cmd, &inputs) {
+        ui::status("Linking", &output.display().to_string());
+        run_step(&output, &cmd, opts.verbose, Some(project))?;
+    }
     Ok(())
 }
 
@@ -609,8 +709,8 @@ fn prune(plan: &BuildPlan<'_>) -> usize {
         }
     }
     for (name, lib) in &plan.libs {
-        if !lib.sources.is_empty() {
-            expected.insert(archive_path(opts, name));
+        if lib.produces_library(opts) {
+            expected.insert(library_path(opts, name));
         }
     }
     for target in project.targets() {
@@ -1038,6 +1138,9 @@ pub(crate) fn source_flags(
     if let Some(target) = &opts.cross {
         cmd.extend(target.flags());
     }
+    if opts.shared {
+        cmd.push("-fPIC".into());
+    }
     if third_party {
         cmd.push("-w".into());
     } else if lang == Lang::Cuda {
@@ -1134,6 +1237,14 @@ fn bmi_path(opts: &Options, src: &Path) -> PathBuf {
 
 fn archive_path(opts: &Options, lib: &str) -> PathBuf {
     opts.dir().join("lib").join(format!("lib{lib}.a"))
+}
+
+fn library_path(opts: &Options, lib: &str) -> PathBuf {
+    if opts.shared {
+        opts.dir().join("lib").join(format!("lib{lib}.so"))
+    } else {
+        archive_path(opts, lib)
+    }
 }
 
 fn depfile_path(obj: &Path) -> PathBuf {

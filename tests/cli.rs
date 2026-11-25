@@ -235,6 +235,28 @@ fn qemu_cpp_example_runs_and_passes_its_test_on_arm64() {
             .ok(&["test", "--target", "aarch64-linux-gnu"])
             .contains("1 passed")
     );
+    assert!(
+        project
+            .ok(&[
+                "run",
+                "--target",
+                "aarch64-linux-gnu",
+                "--linkage",
+                "shared"
+            ])
+            .contains("ARM64 checksum: 42")
+    );
+    assert!(
+        project
+            .ok(&[
+                "test",
+                "--target",
+                "aarch64-linux-gnu",
+                "--linkage",
+                "shared"
+            ])
+            .contains("1 passed")
+    );
 }
 
 #[test]
@@ -345,6 +367,18 @@ fn links_a_chain_of_libraries_in_order() {
         );
     assert!(p.ok(&["info"]).contains("links: a, b, c"));
     assert!(p.ok(&["run", "abc"]).contains('3'));
+    p.ok(&["build", "--linkage", "shared"]);
+    assert!(p.ok(&["run", "abc", "--linkage", "shared"]).contains('3'));
+    for name in ["a", "b", "c"] {
+        assert!(p.exists(&format!("build/debug/lib/lib{name}.a")));
+        assert!(p.exists(&format!("build/shared/debug/lib/lib{name}.so")));
+    }
+    assert!(p.ok(&["test", "--linkage", "shared"]).contains("1 passed"));
+    let incremental = p.ok(&["build", "--linkage", "shared"]);
+    assert!(!incremental.contains("Compiling") && !incremental.contains("Linking"));
+    p.ok(&["clean", "--linkage", "shared"]);
+    assert!(!p.exists("build/shared"));
+    assert!(p.exists("build/debug/lib/liba.a"));
 }
 
 #[test]

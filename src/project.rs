@@ -53,6 +53,8 @@ pub struct Library {
     /// Compiler flags for the system libraries used by this library and by
     /// the internal libraries it uses (their headers may include them).
     pub cflags: Vec<String>,
+    /// Linker flags used when this library is built as a shared object.
+    pub link_flags: Vec<String>,
     /// Every internal library this one uses, directly or not.
     pub closure: Vec<String>,
     /// Files for moc, uic and rcc.
@@ -73,6 +75,7 @@ impl Library {
             deps: BTreeSet::new(),
             system: BTreeSet::new(),
             cflags: Vec::new(),
+            link_flags: Vec::new(),
             closure: Vec::new(),
             qt: QtFiles::default(),
             third_party,
@@ -345,6 +348,22 @@ pub fn discover_with_header_checks(
         lib.cflags = cflags;
         lib.closure = closure;
     }
+    if opts.shared {
+        for name in &lib_order {
+            let lib = &libs[name];
+            let mut deps = Vec::new();
+            for dep in lib
+                .system
+                .iter()
+                .chain(lib.closure.iter().flat_map(|name| &libs[name].system))
+            {
+                if !deps.contains(dep) {
+                    deps.push(dep.clone());
+                }
+            }
+            libs.get_mut(name).unwrap().link_flags = system.link_flags(&deps);
+        }
+    }
 
     let ctx = Context {
         resolver: &resolver,
@@ -419,6 +438,9 @@ pub fn discover_with_header_checks(
             .chain(&tests)
             .any(|target| target.system.contains(&SysDep::CudaRuntime)))
     .then(|| {
+        if opts.shared {
+            return Err("CUDA projects currently require --linkage static.".into());
+        }
         if opts.cross.is_some() {
             return Err("CUDA builds are not available for the ARM64 QEMU target.".into());
         }
