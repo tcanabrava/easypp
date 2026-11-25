@@ -127,19 +127,12 @@ pub struct System {
 
 impl Snapshot {
     pub fn detect() -> Snapshot {
-        let mut include_dirs: Vec<PathBuf> = Vec::new();
-        for lang in ["c++", "c"] {
-            for dir in compiler_include_dirs(lang, &[]) {
-                if !include_dirs.contains(&dir) {
-                    include_dirs.push(dir);
-                }
-            }
-        }
+        let mut include_dirs = compiler_include_dirs(&[]);
         if include_dirs.is_empty() {
             include_dirs = existing(FALLBACK_INCLUDE_DIRS.iter().map(PathBuf::from));
         }
 
-        let resource_dir = capture("clang", &["-print-resource-dir"])
+        let resource_dir = capture(Command::new("clang").arg("-print-resource-dir"))
             .and_then(|out| fs::canonicalize(out.trim()).ok());
         let builtin_dirs = include_dirs
             .iter()
@@ -150,13 +143,7 @@ impl Snapshot {
             .cloned()
             .collect();
 
-        let default_lib_dirs: Vec<PathBuf> = capture("clang", &["-print-search-dirs"])
-            .and_then(|out| {
-                out.lines()
-                    .find_map(|l| l.strip_prefix("libraries: =").map(String::from))
-            })
-            .map(|dirs| existing(dirs.split(':').map(PathBuf::from)))
-            .unwrap_or_default();
+        let default_lib_dirs = compiler_lib_dirs(&[]);
         let mut lib_dirs = default_lib_dirs.clone();
         for dir in existing(EXTRA_LIB_DIRS.iter().map(PathBuf::from)) {
             if !lib_dirs.contains(&dir) {
@@ -182,33 +169,9 @@ impl Snapshot {
 
     fn detect_cross(target: &crate::cross::Target) -> Self {
         let flags = target.flags();
-        let mut include_dirs = compiler_include_dirs("c++", &flags);
-        for dir in compiler_include_dirs("c", &flags) {
-            if !include_dirs.contains(&dir) {
-                include_dirs.push(dir);
-            }
-        }
-        let output = Command::new("clang")
-            .args(&flags)
-            .arg("-print-search-dirs")
-            .output()
-            .ok();
-        let lib_dirs = output
-            .as_ref()
-            .filter(|out| out.status.success())
-            .map(|out| String::from_utf8_lossy(&out.stdout))
-            .and_then(|text| {
-                let path = text
-                    .lines()
-                    .find_map(|line| line.strip_prefix("libraries: ="))?;
-                Some(existing(
-                    path.split(':')
-                        .map(PathBuf::from)
-                        .filter_map(|p| p.canonicalize().ok())
-                        .filter(|p| p.starts_with(&target.sysroot)),
-                ))
-            })
-            .unwrap_or_default();
+        let include_dirs = compiler_include_dirs(&flags);
+        let mut lib_dirs = compiler_lib_dirs(&flags);
+        lib_dirs.retain(|dir| dir.starts_with(&target.sysroot));
         let pc_dirs = target.pkg_config_dirs();
         let mut snapshot = Self {
             builtin_dirs: include_dirs
@@ -248,17 +211,8 @@ impl Snapshot {
             .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
             .collect();
         for name in names {
-            let query = |flag: &str| {
-                let out = target
-                    .pkg_config(&self.pc_dirs)
-                    .args([flag, name.as_str()])
-                    .output()
-                    .ok()?;
-                out.status
-                    .success()
-                    .then(|| split_flags(&String::from_utf8_lossy(&out.stdout)))
-            };
-            let (Some(cflags), Some(libs)) = (query("--cflags"), query("--libs")) else {
+            let Ok((cflags, libs)) = query_pkg_flags(&name, || target.pkg_config(&self.pc_dirs))
+            else {
                 continue;
             };
             let include_dirs = cflags
@@ -305,7 +259,9 @@ impl Snapshot {
         let mut dirs = pkg_config_paths();
         match self
             .pkg_config
-            .then(|| capture("pkg-config", &["--variable", "pc_path", "pkg-config"]))
+            .then(|| {
+                capture(Command::new("pkg-config").args(["--variable", "pc_path", "pkg-config"]))
+            })
             .flatten()
         {
             Some(path) => dirs.extend(path.trim().split(':').map(PathBuf::from)),
@@ -620,20 +576,8 @@ impl System {
         if let Some(flags) = self.pkg_flags.borrow().get(name) {
             return flags.clone();
         }
-        let from_tool = (self.snapshot.pkg_config && !crate::kde::is_native(name)).then(|| {
-            let run = |what: &str| -> Result<Vec<String>, String> {
-                let out = pkg_config_command()
-                    .args([what, name])
-                    .stdin(Stdio::null())
-                    .output()
-                    .map_err(|e| e.to_string())?;
-                if !out.status.success() {
-                    return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-                }
-                Ok(split_flags(&String::from_utf8_lossy(&out.stdout)))
-            };
-            Ok::<_, String>((run("--cflags")?, run("--libs")?))
-        });
+        let from_tool = (self.snapshot.pkg_config && !crate::kde::is_native(name))
+            .then(|| query_pkg_flags(name, pkg_config_command));
         let flags = match from_tool {
             Some(Ok(flags)) => flags,
             other => {
@@ -796,8 +740,18 @@ fn existing(dirs: impl Iterator<Item = PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-/// The `#include <...>` search list clang uses for `lang` ("c" or "c++").
-fn compiler_include_dirs(lang: &str, flags: &[String]) -> Vec<PathBuf> {
+/// Merge Clang's C++ and C include search lists in that order.
+fn compiler_include_dirs(flags: &[String]) -> Vec<PathBuf> {
+    let mut dirs = clang_include_dirs("c++", flags);
+    for dir in clang_include_dirs("c", flags) {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+fn clang_include_dirs(lang: &str, flags: &[String]) -> Vec<PathBuf> {
     let Ok(out) = Command::new("clang")
         .args(flags)
         .args(["-E", "-x", lang, "-", "-v"])
@@ -815,6 +769,17 @@ fn compiler_include_dirs(lang: &str, flags: &[String]) -> Vec<PathBuf> {
         .take_while(|l| !l.starts_with("End of search list."))
         .map(|l| PathBuf::from(l.trim()));
     existing(dirs)
+}
+
+fn compiler_lib_dirs(flags: &[String]) -> Vec<PathBuf> {
+    let Some(output) = capture(Command::new("clang").args(flags).arg("-print-search-dirs")) else {
+        return Vec::new();
+    };
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix("libraries: ="))
+        .map(|dirs| existing(dirs.split(':').map(PathBuf::from)))
+        .unwrap_or_default()
 }
 
 fn pkg_config_paths() -> Vec<PathBuf> {
@@ -837,12 +802,22 @@ pub(crate) fn pkg_config_command() -> Command {
     command
 }
 
-fn capture(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+fn query_pkg_flags(name: &str, command: impl Fn() -> Command) -> Result<Flags, String> {
+    let query = |flag| {
+        let out = command()
+            .args([flag, name])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(split_flags(&String::from_utf8_lossy(&out.stdout)))
+    };
+    Ok((query("--cflags")?, query("--libs")?))
+}
+
+fn capture(command: &mut Command) -> Option<String> {
+    let out = command.output().ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())

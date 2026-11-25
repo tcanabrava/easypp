@@ -10,7 +10,7 @@ use crate::hints;
 use crate::project::{Kind, Lang, Project, Target};
 use crate::qt::{self, QtFiles};
 use crate::ui;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
@@ -92,7 +92,7 @@ fn sanitizer_defaults_source(opts: &Options) -> PathBuf {
         .join("sanitizer_defaults.c")
 }
 const C_STD: &str = "-std=c17";
-const CPP_STD: &str = "-std=c++23";
+pub(crate) const CPP_STD: &str = "-std=c++23";
 
 pub struct Options {
     pub release: bool,
@@ -127,11 +127,7 @@ impl Options {
 
 /// Where a target's executable ends up, relative to the project root.
 pub fn exe_path(opts: &Options, target: &Target) -> PathBuf {
-    let sub = match target.kind {
-        Kind::Bin => "bin",
-        Kind::Test => "tests",
-    };
-    opts.dir().join(sub).join(&target.name)
+    opts.dir().join(target_key(target))
 }
 
 /// A library or program with everything needed to build it, including the
@@ -216,36 +212,130 @@ fn component(
     }
 }
 
-fn lib_components(project: &Project, opts: &Options) -> BTreeMap<String, Component> {
-    project
-        .lib_order
-        .iter()
-        .map(|name| {
-            let lib = &project.libs[name];
-            let c = component(
-                project,
-                opts,
-                &lib_key(name),
-                &lib.sources,
-                &lib.cflags,
-                &lib.qt,
-                &lib.closure,
-            );
-            (name.clone(), c)
-        })
-        .collect()
+pub(crate) struct BuildPlan<'a> {
+    project: &'a Project,
+    opts: &'a Options,
+    libs: BTreeMap<&'a str, Component>,
+    programs: HashMap<(Kind, &'a str), Component>,
 }
 
-fn target_component(project: &Project, opts: &Options, target: &Target) -> Component {
-    component(
-        project,
-        opts,
-        &target_key(target),
-        &target.sources,
-        &target.cflags,
-        &target.qt,
-        &target.libs,
-    )
+impl<'a> BuildPlan<'a> {
+    pub fn new(project: &'a Project, opts: &'a Options) -> Self {
+        let libs = project
+            .libs
+            .values()
+            .map(|lib| {
+                let name = lib.name.as_str();
+                (
+                    name,
+                    component(
+                        project,
+                        opts,
+                        &lib_key(name),
+                        &lib.sources,
+                        &lib.cflags,
+                        &lib.qt,
+                        &lib.closure,
+                    ),
+                )
+            })
+            .collect();
+        let programs = project
+            .targets()
+            .map(|target| {
+                let key = (target.kind, target.name.as_str());
+                (
+                    key,
+                    component(
+                        project,
+                        opts,
+                        &target_key(target),
+                        &target.sources,
+                        &target.cflags,
+                        &target.qt,
+                        &target.libs,
+                    ),
+                )
+            })
+            .collect();
+        Self {
+            project,
+            opts,
+            libs,
+            programs,
+        }
+    }
+
+    fn program<'s>(&'s self, target: &'s Target) -> &'s Component {
+        &self.programs[&(target.kind, target.name.as_str())]
+    }
+
+    fn components(&self) -> impl Iterator<Item = &Component> {
+        self.libs
+            .values()
+            .chain(self.project.targets().map(|target| self.program(target)))
+    }
+
+    /// Generate framework sources and compile module providers for editor tools.
+    pub fn generate(&self) -> Result<(), String> {
+        let (project, opts) = (self.project, self.opts);
+        let plans: Vec<_> = self.components().map(|component| &component.plan).collect();
+        run_codegen(project, &plans, opts)?;
+
+        let units = || {
+            self.components().flat_map(|component| {
+                component
+                    .sources
+                    .iter()
+                    .map(|src| (src.as_path(), component.cflags.as_slice()))
+            })
+        };
+        compile_header_units(
+            project,
+            opts,
+            units().filter(|(src, _)| !project.modules.provides(src)),
+        )?;
+        compile_units(
+            project,
+            opts,
+            units()
+                .filter(|(src, _)| project.modules.provides(src))
+                .chain(project.modules.standard_sources()),
+        )
+    }
+
+    /// Rewrites the editor's compilation database when its contents change.
+    /// Returns the number of entries when the file was written.
+    pub fn write_compile_commands(&self) -> Result<Option<usize>, String> {
+        let (project, opts) = (self.project, self.opts);
+        let directory = path_str(&project.root);
+        let entries: Vec<_> = self
+            .components()
+            .flat_map(|component| {
+                component.sources.iter().filter(|src| src.starts_with("src")).map(|src| {
+                let obj = object_path(opts, src);
+                serde_json::json!({
+                    "directory": directory,
+                    "file": path_str(src),
+                    "output": path_str(&obj),
+                    "arguments": compile_command(project, opts, src, &obj, &component.cflags),
+                })
+            })
+            })
+            .collect();
+        let mut content = serde_json::to_string_pretty(&entries)
+            .map_err(|e| format!("cannot serialize {COMPILE_DB}: {e}"))?;
+        content.push('\n');
+
+        // Older versions wrote it under build/, where a stale copy can confuse editors.
+        let _ = fs::remove_file(Path::new(BUILD_DIR).join(COMPILE_DB));
+        let path = Path::new(COMPILE_DB);
+        if fs::read_to_string(path).ok().as_deref() == Some(content.as_str()) {
+            return Ok(None);
+        }
+        fs::write(path, content).map_err(|e| format!("cannot write {COMPILE_DB}: {e}"))?;
+        Ok(Some(entries.len()))
+    }
 }
 
 /// Builds every library plus the given executables.
@@ -262,24 +352,22 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         cuda.configure()?;
     }
     let start = Instant::now();
-    let libs = lib_components(project, opts);
-    let programs: Vec<(&Target, Component)> = targets
-        .iter()
-        .map(|t| (*t, target_component(project, opts, t)))
-        .collect();
+    let plan = BuildPlan::new(project, opts);
+    let libs = &plan.libs;
+    let programs: Vec<_> = targets.iter().map(|t| (*t, plan.program(t))).collect();
     // 1. Qt code generation.
     let plans: Vec<&qt::Plan> = libs
         .values()
-        .chain(programs.iter().map(|(_, c)| c))
+        .chain(programs.iter().map(|(_, c)| *c))
         .map(|c| &c.plan)
         .collect();
     run_codegen(project, &plans, opts)?;
-    write_compile_commands(project, opts, &libs)?;
+    plan.write_compile_commands()?;
 
     // 2. Compile (in parallel) everything that is out of date.
     let units = libs
         .values()
-        .chain(programs.iter().map(|(_, c)| c))
+        .chain(programs.iter().map(|(_, c)| *c))
         .flat_map(|c| {
             c.sources
                 .iter()
@@ -319,7 +407,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
     } else {
         "ar"
     };
-    for (name, lib) in &libs {
+    for (name, lib) in libs {
         if lib.sources.is_empty() {
             continue;
         }
@@ -338,7 +426,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
     //    plus the Qt resources of those libraries.
     for (target, own) in &programs {
         let exe = exe_path(opts, target);
-        let used: Vec<&Component> = target.libs.iter().map(|n| &libs[n]).collect();
+        let used: Vec<&Component> = target.libs.iter().map(|n| &libs[n.as_str()]).collect();
         let mut objects: Vec<PathBuf> = own
             .sources
             .iter()
@@ -352,7 +440,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         let archives: Vec<PathBuf> = target
             .libs
             .iter()
-            .filter(|n| !libs[*n].sources.is_empty())
+            .filter(|n| !libs[n.as_str()].sources.is_empty())
             .map(|n| archive_path(opts, n))
             .collect();
         let device_runtime = if project.target_has_cuda_sources(target) {
@@ -382,7 +470,6 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
         let any_cpp = any_cuda || sources.any(|s| Lang::of(s) == Some(Lang::Cpp));
         let mut cmd = vec![driver(if any_cpp { Lang::Cpp } else { Lang::C }).to_string()];
         if let Some(target) = &opts.cross {
-            cmd.extend(target.flags());
             cmd.extend(target.link_flags());
         }
         cmd.extend(objects.iter().chain(&archives).map(|p| path_str(p)));
@@ -418,7 +505,7 @@ pub fn build(project: &Project, opts: &Options, targets: &[&Target]) -> Result<(
     }
 
     // 5. Remove what no longer belongs to the project.
-    let removed = prune(project, opts, &libs);
+    let removed = prune(&plan);
     if removed > 0 {
         ui::status(
             "Removed",
@@ -490,21 +577,14 @@ fn link_cuda_device_code(
 /// library, program, test or source produces (deleted targets, renamed
 /// files, ...), with their .cmd/.d companions, and then empty folders.
 /// Returns how many files were removed.
-fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) -> usize {
-    let targets: Vec<(&Target, Component)> = project
-        .bins
-        .iter()
-        .chain(&project.tests)
-        .map(|t| (t, target_component(project, opts, t)))
-        .collect();
-    let components = libs.values().chain(targets.iter().map(|(_, c)| c));
-
+fn prune(plan: &BuildPlan<'_>) -> usize {
+    let (project, opts) = (plan.project, plan.opts);
     let mut expected: HashSet<PathBuf> = HashSet::new();
     for (src, _) in project.modules.standard_sources() {
         expected.insert(object_path(opts, src));
         expected.insert(bmi_path(opts, src));
     }
-    for c in components {
+    for c in plan.components() {
         for src in c.sources.iter().chain(&c.resources) {
             expected.insert(object_path(opts, src));
             expected.extend(
@@ -517,13 +597,9 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
                 expected.insert(bmi_path(opts, src));
             }
         }
-        for step in c
-            .plan
-            .ui
-            .iter()
-            .chain(&c.plan.generate)
-            .chain(&c.plan.qml_registration)
-            .chain(&c.plan.qml_resource)
+        for step in qt::Plan::PHASES
+            .into_iter()
+            .flat_map(|phase| phase(&c.plan))
         {
             expected.insert(step.output.clone());
             expected.extend(step.additional_outputs.iter().cloned());
@@ -532,12 +608,12 @@ fn prune(project: &Project, opts: &Options, libs: &BTreeMap<String, Component>) 
             expected.insert(manifest.clone());
         }
     }
-    for (name, lib) in libs {
+    for (name, lib) in &plan.libs {
         if !lib.sources.is_empty() {
             expected.insert(archive_path(opts, name));
         }
     }
-    for (target, _) in &targets {
+    for target in project.targets() {
         expected.insert(exe_path(opts, target));
         if project.target_has_cuda_sources(target) {
             expected.insert(cuda_device_object(opts, target));
@@ -586,8 +662,7 @@ fn prune_dir(dir: &Path, expected: &HashSet<PathBuf>) -> usize {
     removed
 }
 
-/// Runs moc, uic and rcc where their outputs are stale: uic first (sources and
-/// moc may include its headers), then moc and rcc.
+/// Waits for a phase to finish before checking the next phase's inputs.
 fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result<(), String> {
     for (path, contents) in plans.iter().filter_map(|plan| plan.qml_manifest.as_ref()) {
         if fs::read_to_string(path).ok().as_ref() != Some(contents) {
@@ -598,9 +673,10 @@ fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result
                 })?;
         }
     }
-    let jobs = |steps: Vec<&qt::Step>| -> Vec<Job> {
-        steps
-            .into_iter()
+    for phase in qt::Plan::PHASES {
+        let jobs = plans
+            .iter()
+            .flat_map(|plan| phase(plan))
             .filter(|s| {
                 !up_to_date(&s.output, &s.cmd, &s.inputs)
                     || s.additional_outputs.iter().any(|p| !p.is_file())
@@ -612,38 +688,10 @@ fn run_codegen(project: &Project, plans: &[&qt::Plan], opts: &Options) -> Result
                 cmd: s.cmd.clone(),
                 compiler: false,
             })
-            .collect()
-    };
-    run_jobs(
-        jobs(plans.iter().flat_map(|p| &p.ui).collect()),
-        opts,
-        project,
-    )?;
-    run_jobs(
-        jobs(plans.iter().flat_map(|p| &p.generate).collect()),
-        opts,
-        project,
-    )?;
-    run_jobs(
-        jobs(
-            plans
-                .iter()
-                .filter_map(|p| p.qml_registration.as_ref())
-                .collect(),
-        ),
-        opts,
-        project,
-    )?;
-    run_jobs(
-        jobs(
-            plans
-                .iter()
-                .filter_map(|p| p.qml_resource.as_ref())
-                .collect(),
-        ),
-        opts,
-        project,
-    )
+            .collect();
+        run_jobs(jobs, opts, project)?;
+    }
+    Ok(())
 }
 
 fn header_unit(
@@ -799,42 +847,6 @@ fn compile_units<'a>(
     Ok(())
 }
 
-/// Generate framework sources and compile module providers for editor tools.
-pub fn generate(project: &Project, opts: &Options) -> Result<(), String> {
-    let libs = lib_components(project, opts);
-    let targets: Vec<Component> = project
-        .bins
-        .iter()
-        .chain(&project.tests)
-        .map(|t| target_component(project, opts, t))
-        .collect();
-    let plans: Vec<&qt::Plan> = libs.values().chain(&targets).map(|c| &c.plan).collect();
-    run_codegen(project, &plans, opts)?;
-    compile_header_units(
-        project,
-        opts,
-        libs.values().chain(&targets).flat_map(|component| {
-            component
-                .sources
-                .iter()
-                .filter(|src| !project.modules.provides(src))
-                .map(|src| (src.as_path(), component.cflags.as_slice()))
-        }),
-    )?;
-    let providers = libs.values().chain(&targets).flat_map(|component| {
-        component
-            .sources
-            .iter()
-            .filter(|src| project.modules.provides(src))
-            .map(|src| (src.as_path(), component.cflags.as_slice()))
-    });
-    compile_units(
-        project,
-        opts,
-        providers.chain(project.modules.standard_sources()),
-    )
-}
-
 /// One command producing one file: a compilation or a code generator.
 struct Job {
     verb: &'static str,
@@ -851,64 +863,51 @@ fn run_jobs(jobs: Vec<Job>, opts: &Options, project: &Project) -> Result<(), Str
         return Ok(());
     }
     let compiling = jobs[0].compiler;
-    let workers = opts.jobs.clamp(1, jobs.len());
-    let queue = Mutex::new(jobs.into_iter());
     let failures = AtomicUsize::new(0);
     let spawn_error: Mutex<Option<String>> = Mutex::new(None);
     let failed_output: Mutex<String> = Mutex::new(String::new());
 
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    if failures.load(Ordering::Relaxed) > 0 {
-                        break;
-                    }
-                    let Some(job) = queue.lock().unwrap().next() else {
-                        break;
-                    };
+    crate::parallel::for_each_while(
+        jobs.into_iter(),
+        opts.jobs,
+        || failures.load(Ordering::Relaxed) == 0,
+        |job| {
+            ui::status(job.verb, &job.label);
+            if opts.verbose {
+                eprintln!("{}", job.cmd.join(" "));
+            }
+            if let Some(parent) = job.output.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::remove_file(stamp_path(&job.output));
 
-                    ui::status(job.verb, &job.label);
-                    if opts.verbose {
-                        eprintln!("{}", job.cmd.join(" "));
-                    }
-                    if let Some(parent) = job.output.parent() {
-                        let _ = fs::create_dir_all(parent);
-                    }
-                    let _ = fs::remove_file(stamp_path(&job.output));
-
-                    let mut command = Command::new(&job.cmd[0]);
-                    command.args(&job.cmd[1..]);
-                    if job.compiler
-                        && ui::color()
-                        && matches!(job.cmd[0].as_str(), "clang" | "clang++")
-                    {
-                        command.arg("-fcolor-diagnostics");
-                    }
-                    match command.output() {
-                        Ok(out) => {
-                            let mut err = std::io::stderr().lock();
-                            let _ = err.write_all(&out.stdout);
-                            let _ = err.write_all(&out.stderr);
-                            if out.status.success() {
-                                write_stamp(&job.output, &job.cmd);
-                            } else {
-                                failures.fetch_add(1, Ordering::Relaxed);
-                                failed_output
-                                    .lock()
-                                    .unwrap()
-                                    .push_str(&String::from_utf8_lossy(&out.stderr));
-                            }
-                        }
-                        Err(e) => {
-                            failures.fetch_add(1, Ordering::Relaxed);
-                            *spawn_error.lock().unwrap() = Some(spawn_failure(&job.cmd[0], &e));
-                        }
+            let mut command = Command::new(&job.cmd[0]);
+            command.args(&job.cmd[1..]);
+            if job.compiler && ui::color() && matches!(job.cmd[0].as_str(), "clang" | "clang++") {
+                command.arg("-fcolor-diagnostics");
+            }
+            match command.output() {
+                Ok(out) => {
+                    let mut err = std::io::stderr().lock();
+                    let _ = err.write_all(&out.stdout);
+                    let _ = err.write_all(&out.stderr);
+                    if out.status.success() {
+                        write_stamp(&job.output, &job.cmd);
+                    } else {
+                        failures.fetch_add(1, Ordering::Relaxed);
+                        failed_output
+                            .lock()
+                            .unwrap()
+                            .push_str(&String::from_utf8_lossy(&out.stderr));
                     }
                 }
-            });
-        }
-    });
+                Err(e) => {
+                    failures.fetch_add(1, Ordering::Relaxed);
+                    *spawn_error.lock().unwrap() = Some(spawn_failure(&job.cmd[0], &e));
+                }
+            }
+        },
+    );
 
     if let Some(e) = spawn_error.into_inner().unwrap() {
         return Err(e);
@@ -1110,85 +1109,6 @@ fn compile_command(
     cmd
 }
 
-/// Rewrites `compile_commands.json` if the project's compile commands changed.
-/// Returns the number of entries when the file was (re)written.
-pub fn update_compile_commands(project: &Project, opts: &Options) -> Result<Option<usize>, String> {
-    write_compile_commands(project, opts, &lib_components(project, opts))
-}
-
-/// `compile_commands.json` at the project root, for clangd, VS Code and CLion.
-fn write_compile_commands(
-    project: &Project,
-    opts: &Options,
-    libs: &BTreeMap<String, Component>,
-) -> Result<Option<usize>, String> {
-    let directory = json_str(&path_str(&project.root));
-    let targets: Vec<Component> = project
-        .bins
-        .iter()
-        .chain(&project.tests)
-        .map(|t| target_component(project, opts, t))
-        .collect();
-    // The project's own files, with their component's flags (generated files
-    // are left out: editors do not open them).
-    let own = |c: &Component| -> Vec<PathBuf> {
-        c.sources
-            .iter()
-            .filter(|s| s.starts_with("src"))
-            .cloned()
-            .collect()
-    };
-    let units: Vec<(PathBuf, &[String])> = libs
-        .values()
-        .chain(&targets)
-        .flat_map(|c| own(c).into_iter().map(move |s| (s, c.cflags.as_slice())))
-        .collect();
-
-    let entries: Vec<String> = units
-        .iter()
-        .map(|(src, cflags)| {
-            let obj = object_path(opts, src);
-            let args: Vec<String> = compile_command(project, opts, src, &obj, cflags)
-                .iter()
-                .map(|a| json_str(a))
-                .collect();
-            format!(
-                "  {{\n    \"directory\": {directory},\n    \"file\": {},\n    \"output\": {},\n    \"arguments\": [{}]\n  }}",
-                json_str(&path_str(src)),
-                json_str(&path_str(&obj)),
-                args.join(", ")
-            )
-        })
-        .collect();
-
-    // Older versions wrote it under build/; a stale copy there would confuse editors.
-    let _ = fs::remove_file(Path::new(BUILD_DIR).join(COMPILE_DB));
-
-    let path = Path::new(COMPILE_DB);
-    let content = format!("[\n{}\n]\n", entries.join(",\n"));
-    if fs::read_to_string(path).ok().as_deref() == Some(content.as_str()) {
-        return Ok(None);
-    }
-    fs::write(path, content).map_err(|e| format!("cannot write {COMPILE_DB}: {e}"))?;
-    Ok(Some(entries.len()))
-}
-
-fn json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
 /// `src/libs/foo/a.cpp` -> `build/debug/obj/libs/foo/a.cpp.o`, and generated
 /// `build/debug/gen/libs/foo/moc_a.cpp` -> `build/debug/obj/gen/libs/foo/moc_a.cpp.o`
 fn object_path(opts: &Options, src: &Path) -> PathBuf {
@@ -1310,10 +1230,5 @@ mod tests {
             ]
         );
         fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn escapes_json() {
-        assert_eq!(json_str("a\"b\\c"), "\"a\\\"b\\\\c\"");
     }
 }

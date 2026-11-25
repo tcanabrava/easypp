@@ -1,5 +1,5 @@
 //! Read-only checks for the local toolchain and a project's build dependencies.
-use crate::builder::Options;
+use crate::builder::{CPP_STD, Options};
 use crate::{conan, project, system, ui};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
@@ -49,13 +49,13 @@ pub fn run(start: &Path, opts: &Options) -> Result<bool, String> {
         ui::warn("No debugger found. Install LLDB or GDB to use easypp debug.");
     }
 
+    let target_flags: Vec<_> = opts
+        .cross
+        .iter()
+        .flat_map(|target| target.link_flags())
+        .collect();
     if clang_cpp {
-        let target_flags: Vec<_> = opts
-            .cross
-            .iter()
-            .flat_map(|target| target.flags().into_iter().chain(target.link_flags()))
-            .collect();
-        let mut flags = vec!["-std=c++23"];
+        let mut flags = vec![CPP_STD];
         flags.extend(target_flags.iter().map(String::as_str));
         if opts.sanitizers() {
             flags.push("-fsanitize=address,undefined");
@@ -141,12 +141,7 @@ pub fn run(start: &Path, opts: &Options) -> Result<bool, String> {
         }
         if openmp.get() && clang_cpp {
             let mut flags = vec!["-fopenmp"];
-            let cross_flags: Vec<_> = opts
-                .cross
-                .iter()
-                .flat_map(|target| target.flags().into_iter().chain(target.link_flags()))
-                .collect();
-            flags.extend(cross_flags.iter().map(String::as_str));
+            flags.extend(target_flags.iter().map(String::as_str));
             ok &= probe(
                 "OpenMP headers and runtime",
                 &flags,

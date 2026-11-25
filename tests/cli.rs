@@ -303,6 +303,34 @@ fn new_project_builds_runs_and_tests() {
 }
 
 #[test]
+fn compile_database_keeps_program_and_test_with_the_same_name() {
+    let p = Project::new("shared-name");
+    p.remove("src");
+    let program = "src/bin/check \"quoted\".cpp";
+    let test = "src/tests/check \"quoted\".cpp";
+    p.write(program, "int main() {}\n")
+        .write(test, "int main() {}\n");
+
+    p.ok(&["test"]);
+    p.ok(&["run"]);
+    assert!(p.exists("build/debug/tests/check \"quoted\""));
+
+    let database = fs::read_to_string(p.dir.join("compile_commands.json")).unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&database).unwrap();
+    assert_eq!(entries.len(), 2);
+    for (entry, source) in entries.iter().zip([program, test]) {
+        assert_eq!(entry["file"], source);
+        assert!(
+            entry["arguments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|argument| argument == source)
+        );
+    }
+}
+
+#[test]
 fn links_a_chain_of_libraries_in_order() {
     let p = Project::new("chain");
     p.write("src/libs/c/c.hpp", "#pragma once\nint c();\n")

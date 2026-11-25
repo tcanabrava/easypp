@@ -39,35 +39,25 @@ pub fn run(
     eprintln!("\nrunning {} test{s}", tests.len());
 
     let start = Instant::now();
-    let queue = Mutex::new(tests.iter());
     let results: Mutex<Vec<Result>> = Mutex::new(Vec::new());
     let spawn_error: Mutex<Option<String>> = Mutex::new(None);
 
-    std::thread::scope(|scope| {
-        for _ in 0..jobs.clamp(1, tests.len().max(1)) {
-            scope.spawn(|| {
-                loop {
-                    let Some(test) = queue.lock().unwrap().next() else {
-                        break;
-                    };
-                    match run_one(test, args, root, timeout, cross) {
-                        Ok(result) => {
-                            let label = match result.outcome {
-                                Outcome::Passed => ui::green("ok"),
-                                Outcome::Failed(_) => ui::red("FAILED"),
-                                Outcome::TimedOut => ui::red("TIMEOUT"),
-                            };
-                            eprintln!(
-                                "test {} ... {label} ({:.2}s)",
-                                result.name,
-                                result.took.as_secs_f64()
-                            );
-                            results.lock().unwrap().push(result);
-                        }
-                        Err(e) => *spawn_error.lock().unwrap() = Some(e),
-                    }
-                }
-            });
+    crate::parallel::for_each(tests.iter(), jobs, |test| {
+        match run_one(test, args, root, timeout, cross) {
+            Ok(result) => {
+                let label = match result.outcome {
+                    Outcome::Passed => ui::green("ok"),
+                    Outcome::Failed(_) => ui::red("FAILED"),
+                    Outcome::TimedOut => ui::red("TIMEOUT"),
+                };
+                eprintln!(
+                    "test {} ... {label} ({:.2}s)",
+                    result.name,
+                    result.took.as_secs_f64()
+                );
+                results.lock().unwrap().push(result);
+            }
+            Err(e) => *spawn_error.lock().unwrap() = Some(e),
         }
     });
     if let Some(e) = spawn_error.into_inner().unwrap() {

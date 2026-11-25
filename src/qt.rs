@@ -160,12 +160,15 @@ impl QtFiles {
         !self.needs_qt() && self.gresource.is_empty()
     }
 
-    pub fn qml_header_dirs(&self) -> std::collections::BTreeSet<&Path> {
+    pub fn moc_headers(&self) -> impl Iterator<Item = &Path> {
         self.moc
             .iter()
             .filter(|path| crate::project::Lang::of(path).is_none())
-            .filter_map(|path| path.parent())
-            .collect()
+            .map(PathBuf::as_path)
+    }
+
+    pub fn qml_header_dirs(&self) -> std::collections::BTreeSet<&Path> {
+        self.moc_headers().filter_map(Path::parent).collect()
     }
 
     pub fn summary(&self) -> String {
@@ -396,6 +399,16 @@ pub struct Plan {
     pub qml_resource: Option<Step>,
 }
 
+impl Plan {
+    /// Headers before moc, then type registration before bundling QML resources.
+    pub const PHASES: [fn(&Self) -> &[Step]; 4] = [
+        |plan| &plan.ui,
+        |plan| &plan.generate,
+        |plan| plan.qml_registration.as_slice(),
+        |plan| plan.qml_resource.as_slice(),
+    ];
+}
+
 /// Plans the generated files of a component. `moc_flags` are the component's
 /// -I/-D flags (moc needs them to see macros and base classes).
 pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[String]) -> Plan {
@@ -413,6 +426,39 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
     };
     let stem = |p: &Path| p.file_stem().unwrap().to_string_lossy().into_owned();
     let s = |p: &Path| p.to_string_lossy().into_owned();
+    let moc_step = |input: &Path, output: PathBuf| {
+        let mut cmd = vec![s(&tools.moc)];
+        cmd.extend(moc_flags.iter().cloned());
+        cmd.extend([s(input), "-o".into(), s(&output)]);
+        Step {
+            tool: "moc",
+            input: input.to_path_buf(),
+            inputs: vec![input.to_path_buf()],
+            output,
+            cmd,
+            additional_outputs: vec![],
+        }
+    };
+    let rcc_step = |tool, name, input: &Path, output: PathBuf, dependencies: Vec<PathBuf>| {
+        let cmd = vec![
+            s(&tools.rcc),
+            "--name".into(),
+            name,
+            s(input),
+            "-o".into(),
+            s(&output),
+        ];
+        Step {
+            tool,
+            input: input.to_path_buf(),
+            inputs: std::iter::once(input.to_path_buf())
+                .chain(dependencies)
+                .collect(),
+            output,
+            cmd,
+            additional_outputs: vec![],
+        }
+    };
 
     for ui in &files.ui {
         let output = unique(format!("ui_{}", stem(ui)), ".h");
@@ -448,17 +494,7 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         });
         // KConfig includes this file itself when it generates a Q_OBJECT class.
         let output = gen_dir.join(format!("moc_{base}.cpp"));
-        let mut cmd = vec![s(&tools.moc)];
-        cmd.extend(moc_flags.iter().cloned());
-        cmd.extend([s(&header), "-o".into(), s(&output)]);
-        plan.generate.push(Step {
-            tool: "moc",
-            input: header.clone(),
-            inputs: vec![header],
-            output,
-            cmd,
-            additional_outputs: vec![],
-        });
+        plan.generate.push(moc_step(&header, output));
     }
 
     let module = files.qml.as_ref().and_then(|qml| qml.module.as_ref());
@@ -470,49 +506,24 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         } else {
             unique(format!("moc_{}", stem(input)), ".cpp")
         };
-        let mut cmd = vec![s(&tools.moc)];
-        cmd.extend(moc_flags.iter().cloned());
-        cmd.extend([s(input), "-o".into(), s(&output)]);
         if !is_source {
             plan.sources.push(output.clone());
         }
-        let mut additional_outputs = Vec::new();
+        let mut step = moc_step(input, output);
         if module.is_some() && !is_source {
-            cmd.push("--output-json".into());
-            let json = output.with_extension("cpp.json");
+            step.cmd.push("--output-json".into());
+            let json = step.output.with_extension("cpp.json");
             metatypes.push(json.clone());
-            additional_outputs.push(json);
+            step.additional_outputs.push(json);
         }
-        plan.generate.push(Step {
-            tool: "moc",
-            additional_outputs,
-            input: input.clone(),
-            inputs: vec![input.clone()],
-            output,
-            cmd,
-        });
+        plan.generate.push(step);
     }
 
     for qrc in &files.qrc {
         let output = unique(format!("qrc_{}", stem(qrc)), ".cpp");
-        let mut inputs = vec![qrc.clone()];
-        inputs.extend(resource_files(qrc));
         plan.resources.push(output.clone());
-        plan.generate.push(Step {
-            tool: "rcc",
-            additional_outputs: vec![],
-            cmd: vec![
-                s(&tools.rcc),
-                "--name".into(),
-                stem(qrc),
-                s(qrc),
-                "-o".into(),
-                s(&output),
-            ],
-            input: qrc.clone(),
-            inputs,
-            output,
-        });
+        plan.generate
+            .push(rcc_step("rcc", stem(qrc), qrc, output, resource_files(qrc)));
     }
     if let Some(qml) = &files.qml {
         let manifest = gen_dir.join(QML_MANIFEST);
@@ -577,21 +588,7 @@ pub fn plan(tools: &QtTools, files: &QtFiles, gen_dir: &Path, moc_flags: &[Strin
         contents.push_str("</qresource></RCC>\n");
         plan.qml_manifest = Some((manifest.clone(), contents));
         plan.resources.push(output.clone());
-        plan.qml_resource = Some(Step {
-            tool: "rcc (QML)",
-            inputs: std::iter::once(manifest.clone()).chain(inputs).collect(),
-            cmd: vec![
-                s(&tools.rcc),
-                "--name".into(),
-                name,
-                s(&manifest),
-                "-o".into(),
-                s(&output),
-            ],
-            input: manifest,
-            output,
-            additional_outputs: vec![],
-        });
+        plan.qml_resource = Some(rcc_step("rcc (QML)", name, &manifest, output, inputs));
     }
     plan
 }

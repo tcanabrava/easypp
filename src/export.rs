@@ -7,7 +7,7 @@ use crate::project::{Library, Project, Target};
 use crate::system::SysDep;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn write(project: &Project, force: bool) -> Result<(), String> {
     if project.modules.has_header_units() {
@@ -60,7 +60,7 @@ fn cmake(project: &Project) -> String {
         n.to_string_lossy()
             .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
     });
-    let targets: Vec<&Target> = project.bins.iter().chain(&project.tests).collect();
+    let targets: Vec<&Target> = project.targets().collect();
 
     // Library target names: a library may share its name with a program
     // (examples/life has both), which CMake does not allow.
@@ -327,17 +327,19 @@ fn export_modules(w: &mut String, target: &str, visibility: &str, modules: Vec<S
     }
 }
 
+/// Listed so AUTOMOC and AUTOUIC see every Q_OBJECT header and .ui form.
+fn autogen_sources(files: &crate::qt::QtFiles) -> impl Iterator<Item = String> {
+    files
+        .moc_headers()
+        .chain(files.ui.iter().map(PathBuf::as_path))
+        .map(path)
+}
+
 fn library(w: &mut String, project: &Project, lib: &Library, names: &BTreeMap<&str, String>) {
     let target = &names[lib.name.as_str()];
     let (mut sources, modules) = module_sources(project, &lib.sources);
     kconfig_sources(w, &lib.qt, target, &mut sources);
-    // Listed so AUTOMOC/AUTOUIC see every Q_OBJECT header and .ui form.
-    let moc_headers = lib
-        .qt
-        .moc
-        .iter()
-        .filter(|f| crate::project::Lang::of(f).is_none());
-    sources.extend(moc_headers.chain(&lib.qt.ui).map(|s| path(s)));
+    sources.extend(autogen_sources(&lib.qt));
     let deps: Vec<String> = lib
         .deps
         .iter()
@@ -402,17 +404,8 @@ fn library(w: &mut String, project: &Project, lib: &Library, names: &BTreeMap<&s
 fn program(w: &mut String, project: &Project, target: &Target, names: &BTreeMap<&str, String>) {
     let (mut sources, modules) = module_sources(project, &target.sources);
     kconfig_sources(w, &target.qt, &target.name, &mut sources);
-    let moc_headers = target
-        .qt
-        .moc
-        .iter()
-        .filter(|f| crate::project::Lang::of(f).is_none());
-    sources.extend(
-        moc_headers
-            .chain(&target.qt.ui)
-            .chain(&target.qt.qrc)
-            .map(|s| path(s)),
-    );
+    sources.extend(autogen_sources(&target.qt));
+    sources.extend(target.qt.qrc.iter().map(|p| path(p)));
     // Resources of used libraries go straight into the program, as in easypp:
     // inside a static library their registration would be dropped.
     for lib in &target.libs {

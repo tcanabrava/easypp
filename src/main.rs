@@ -10,6 +10,7 @@ mod export;
 mod hints;
 mod kde;
 mod modules;
+mod parallel;
 mod project;
 mod qt;
 mod scaffold;
@@ -233,7 +234,7 @@ fn pick_target<'a>(
     with_tests: bool,
 ) -> Result<&'a Target, String> {
     let candidates: Vec<&Target> = if with_tests {
-        project.bins.iter().chain(&project.tests).collect()
+        project.targets().collect()
     } else {
         project.bins.iter().collect()
     };

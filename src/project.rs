@@ -62,13 +62,30 @@ pub struct Library {
 }
 
 impl Library {
+    fn new(name: String, dir: PathBuf, files: Vec<PathBuf>, third_party: bool) -> Self {
+        Self {
+            name,
+            dir,
+            sources: files
+                .into_iter()
+                .filter(|f| Lang::of(f).is_some())
+                .collect(),
+            deps: BTreeSet::new(),
+            system: BTreeSet::new(),
+            cflags: Vec::new(),
+            closure: Vec::new(),
+            qt: QtFiles::default(),
+            third_party,
+        }
+    }
+
     /// Header-only libraries produce no archive.
     pub fn has_objects(&self) -> bool {
         !self.sources.is_empty()
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Kind {
     Bin,
     Test,
@@ -108,14 +125,16 @@ pub struct Project {
 }
 
 impl Project {
+    pub fn targets(&self) -> impl Iterator<Item = &Target> {
+        self.bins.iter().chain(&self.tests)
+    }
+
     pub fn has_cuda_sources(&self) -> bool {
         crate::cuda::contains_sources(
-            self.libs.values().flat_map(|lib| &lib.sources).chain(
-                self.bins
-                    .iter()
-                    .chain(&self.tests)
-                    .flat_map(|target| &target.sources),
-            ),
+            self.libs
+                .values()
+                .flat_map(|lib| &lib.sources)
+                .chain(self.targets().flat_map(|target| &target.sources)),
         )
     }
 
@@ -181,25 +200,9 @@ pub fn discover_with_header_checks(
             }
             continue;
         }
-        let name = file_name(&entry);
-        let sources = walk(&entry)
-            .into_iter()
-            .filter(|f| Lang::of(f).is_some())
-            .collect();
-        libs.insert(
-            name.clone(),
-            Library {
-                name,
-                dir: entry,
-                sources,
-                deps: BTreeSet::new(),
-                system: BTreeSet::new(),
-                cflags: Vec::new(),
-                closure: Vec::new(),
-                qt: QtFiles::default(),
-                third_party: false,
-            },
-        );
+        let files = walk(&entry);
+        let lib = Library::new(file_name(&entry), entry, files, false);
+        libs.insert(lib.name.clone(), lib);
     }
 
     // Third-party: each folder (or its include/ sub-folder) is a system include
@@ -226,24 +229,8 @@ pub fn discover_with_header_checks(
                     "src/libs/{name} and src/thirdparty/{name} have the same name; rename one"
                 ));
             }
-            let sources = thirdparty_files(&entry)
-                .into_iter()
-                .filter(|f| Lang::of(f).is_some())
-                .collect();
-            libs.insert(
-                name.clone(),
-                Library {
-                    name,
-                    dir: entry,
-                    sources,
-                    deps: BTreeSet::new(),
-                    system: BTreeSet::new(),
-                    cflags: Vec::new(),
-                    closure: Vec::new(),
-                    qt: QtFiles::default(),
-                    third_party: true,
-                },
-            );
+            let files = thirdparty_files(&entry);
+            libs.insert(name.clone(), Library::new(name, entry, files, true));
         }
     }
 
@@ -325,11 +312,7 @@ pub fn discover_with_header_checks(
             walk(&lib.dir)
         };
         let scan = resolver.scan(files.clone(), Some(&lib.name), &modules);
-        if let Some(check) = check_header {
-            for header in &scan.external {
-                check(&system, header);
-            }
-        }
+        scan.check_headers(&system, check_header);
         lib.deps = scan.libs;
         lib.deps
             .extend(modules.libraries(&lib.sources, Some(&lib.name))?);
@@ -342,11 +325,7 @@ pub fn discover_with_header_checks(
             lib.system.insert(SysDep::CudaRuntime);
         }
         lib.qt = QtFiles::from_files(&lib.dir, &files, scan.moc)?;
-        lib.system.extend(resource_dep(&lib.qt, &system)?);
-        lib.system.extend(qml_dep(&lib.qt, &system)?);
-        if !lib.qt.kconfig.is_empty() {
-            lib.system.extend(system.resolve("KConfigSkeleton"));
-        }
+        lib.system.extend(framework_deps(&lib.qt, &system)?);
     }
     let lib_order = topo_order(&libs)?;
 
@@ -473,29 +452,33 @@ struct Context<'a> {
     check_header: Option<HeaderCheck<'a>>,
 }
 
-fn resource_dep(files: &QtFiles, system: &System) -> Result<Option<SysDep>, String> {
-    if files.gresource.is_empty() {
-        return Ok(None);
+/// Dependencies implied by code-generation inputs, even without an include.
+fn framework_deps(files: &QtFiles, system: &System) -> Result<Vec<SysDep>, String> {
+    let mut deps = Vec::new();
+    if !files.kconfig.is_empty() {
+        deps.extend(system.resolve("KConfigSkeleton"));
     }
-    if !crate::system::in_path("glib-compile-resources") {
-        return Err(
-            "GResource manifests need glib-compile-resources (install GLib development tools)"
-                .into(),
+    if !files.gresource.is_empty() {
+        if !crate::system::in_path("glib-compile-resources") {
+            return Err(
+                "GResource manifests need glib-compile-resources (install GLib development tools)"
+                    .into(),
+            );
+        }
+        deps.push(
+            system
+                .package("gio-2.0")
+                .ok_or("GResource manifests need GIO development headers")?,
         );
     }
-    system
-        .package("gio-2.0")
-        .map(Some)
-        .ok_or_else(|| "GResource manifests need GIO development headers".into())
-}
-
-fn qml_dep(files: &QtFiles, system: &System) -> Result<Option<SysDep>, String> {
-    if files.qml.is_none() {
-        return Ok(None);
+    if files.qml.is_some() {
+        deps.push(
+            system
+                .package("Qt6Qml")
+                .ok_or("QML resources need Qt 6 QML development files (Qt6Qml via pkg-config)")?,
+        );
     }
-    system.package("Qt6Qml").map(Some).ok_or_else(|| {
-        "QML resources need Qt 6 QML development files (Qt6Qml via pkg-config)".into()
-    })
+    Ok(deps)
 }
 
 fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>, String> {
@@ -533,11 +516,7 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
         }
 
         let scan = ctx.resolver.scan(files.clone(), None, ctx.modules);
-        if let Some(check) = ctx.check_header {
-            for header in &scan.external {
-                check(ctx.system, header);
-            }
-        }
+        scan.check_headers(ctx.system, ctx.check_header);
         let mut dependencies = scan.libs;
         dependencies.extend(ctx.modules.libraries(&sources, None)?);
         let libs = link_order(&dependencies, ctx.libs, ctx.lib_order);
@@ -561,21 +540,11 @@ fn discover_targets(dir: &Path, kind: Kind, ctx: &Context) -> Result<Vec<Target>
                 }
             }
         }
-        if !qt.kconfig.is_empty() {
-            system.extend(ctx.system.resolve("KConfigSkeleton"));
-        }
-        if let Some(dep) = resource_dep(&qt, ctx.system)?
-            && !system.contains(&dep)
-        {
-            system.push(dep);
-        }
-        if let Some(dep) = qml_dep(&qt, ctx.system)?
-            && !system.contains(&dep)
-        {
-            system.push(dep);
-        }
-        if crate::cuda::contains_sources(&sources) && !system.contains(&SysDep::CudaRuntime) {
-            system.push(SysDep::CudaRuntime);
+        let cuda = crate::cuda::contains_sources(&sources).then_some(SysDep::CudaRuntime);
+        for dep in framework_deps(&qt, ctx.system)?.into_iter().chain(cuda) {
+            if !system.contains(&dep) {
+                system.push(dep);
+            }
         }
         let cflags = ctx.system.compile_flags(&system.iter().cloned().collect());
         let link_flags = ctx.system.link_flags(&system);
@@ -711,13 +680,15 @@ impl Resolver {
     /// True if `file` defines `main()`.
     fn defines_main(&self, file: &Path) -> bool {
         let canonical = fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
-        self.index
-            .borrow_mut()
-            .includes(&canonical, |text| {
-                includes(text).into_iter().map(String::from).collect()
-            })
+        self.file_includes(&canonical)
             .iter()
             .any(|i| i == DEFINES_MAIN)
+    }
+
+    fn file_includes(&self, canonical: &Path) -> Vec<String> {
+        self.index.borrow_mut().includes(canonical, |text| {
+            includes(text).into_iter().map(String::from).collect()
+        })
     }
 
     /// The library that has `include` as a file, when it was written without
@@ -770,9 +741,7 @@ impl Resolver {
         let mut defines_main = false;
 
         while let Some(file) = work.pop() {
-            let file_includes = self.index.borrow_mut().includes(&file, |text| {
-                includes(text).into_iter().map(String::from).collect()
-            });
+            let file_includes = self.file_includes(&file);
             let headers = own
                 .get(&file)
                 .into_iter()
@@ -847,6 +816,16 @@ struct Scan {
     moc: Vec<PathBuf>,
     /// One of its own files defines main().
     defines_main: bool,
+}
+
+impl Scan {
+    fn check_headers(&self, system: &System, check: Option<HeaderCheck<'_>>) {
+        if let Some(check) = check {
+            for header in &self.external {
+                check(system, header);
+            }
+        }
+    }
 }
 
 /// What `includes()` reports for `#include SOME_MACRO`, which cannot be followed.

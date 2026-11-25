@@ -182,8 +182,9 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
     tool("clang-tidy")?;
     // clang-tidy reads the compile commands, and Qt sources need their
     // generated headers.
-    builder::generate(project, opts)?;
-    builder::update_compile_commands(project, opts)?;
+    let plan = builder::BuildPlan::new(project, opts);
+    plan.generate()?;
+    plan.write_compile_commands()?;
 
     let mut files = own_files(&project.root, true);
     files.retain(|file| Lang::of(file) != Some(Lang::Cuda));
@@ -195,38 +196,26 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
         ))
     };
 
-    let queue = Mutex::new(files.iter());
     let warnings = Mutex::new(0usize);
     let error: Mutex<Option<String>> = Mutex::new(None);
-    std::thread::scope(|scope| {
-        for _ in 0..opts.jobs.clamp(1, files.len().max(1)) {
-            scope.spawn(|| {
-                loop {
-                    let Some(file) = queue.lock().unwrap().next() else {
-                        break;
-                    };
-                    ui::status("Linting", &file.display().to_string());
-                    let mut command = Command::new("clang-tidy");
-                    command
-                        .current_dir(&project.root)
-                        .args(["-p", ".", "--quiet"]);
-                    if let Some(config) = &config {
-                        command.arg(format!("--config={config}"));
-                    }
-                    match command.arg(file).output() {
-                        Ok(out) => {
-                            let (text, count) = own_warnings(&String::from_utf8_lossy(&out.stdout));
-                            if count > 0 {
-                                eprint!("{text}");
-                                *warnings.lock().unwrap() += count;
-                            }
-                        }
-                        Err(e) => {
-                            *error.lock().unwrap() = Some(format!("cannot run clang-tidy: {e}"))
-                        }
-                    }
+    crate::parallel::for_each(files.iter(), opts.jobs, |file| {
+        ui::status("Linting", &file.display().to_string());
+        let mut command = Command::new("clang-tidy");
+        command
+            .current_dir(&project.root)
+            .args(["-p", ".", "--quiet"]);
+        if let Some(config) = &config {
+            command.arg(format!("--config={config}"));
+        }
+        match command.arg(file).output() {
+            Ok(out) => {
+                let (text, count) = own_warnings(&String::from_utf8_lossy(&out.stdout));
+                if count > 0 {
+                    eprint!("{text}");
+                    *warnings.lock().unwrap() += count;
                 }
-            });
+            }
+            Err(e) => *error.lock().unwrap() = Some(format!("cannot run clang-tidy: {e}")),
         }
     });
     if let Some(e) = error.into_inner().unwrap() {
@@ -247,7 +236,7 @@ pub fn lint(project: &Project, opts: &Options) -> Result<bool, String> {
 
 fn lint_qml_modules(project: &Project, opts: &Options) -> Result<bool, String> {
     let mut ok = true;
-    for target in project.bins.iter().chain(&project.tests) {
+    for target in project.targets() {
         let Some(resources) = &target.qt.qml else {
             continue;
         };

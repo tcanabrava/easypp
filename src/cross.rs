@@ -58,11 +58,12 @@ impl Target {
     }
 
     pub fn link_flags(&self) -> impl Iterator<Item = String> + '_ {
-        LIB_DIRS
+        let search_dirs = LIB_DIRS
             .iter()
             .map(|dir| self.sysroot.join(dir))
             .filter(|dir| dir.is_dir())
-            .map(|dir| format!("-L{}", dir.display()))
+            .map(|dir| format!("-L{}", dir.display()));
+        self.flags().into_iter().chain(search_dirs)
     }
 
     pub fn pkg_config(&self, dirs: &[PathBuf]) -> Command {

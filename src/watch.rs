@@ -45,10 +45,11 @@ fn regenerate(root: &Path, opts: &Options, first: bool) {
         Err(e) => return ui::error(&e),
     };
     // Generated files go to build/, outside src/, so this cannot retrigger us.
-    if let Err(e) = builder::generate(&project, opts) {
+    let plan = builder::BuildPlan::new(&project, opts);
+    if let Err(e) = plan.generate() {
         ui::error(&e);
     }
-    match builder::update_compile_commands(&project, opts) {
+    match plan.write_compile_commands() {
         Ok(Some(entries)) => ui::status(
             if first { "Wrote" } else { "Updated" },
             &format!("{} ({entries} files)", builder::COMPILE_DB),
