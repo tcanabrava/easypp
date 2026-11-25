@@ -8,6 +8,7 @@ mod cuda;
 mod doctor;
 mod export;
 mod hints;
+mod install;
 mod kde;
 mod modules;
 mod parallel;
@@ -90,6 +91,7 @@ fn run() -> Result<ExitCode, String> {
         match action {
             Actions::Debug(_) => return Err("Cross-target debugging needs QEMU's remote debugger. Use easypp run or test with this target.".into()),
             Actions::ExportCmake { .. } => return Err("CMake export for cross targets requires a target toolchain file. Build this target with easypp.".into()),
+            Actions::Install => return Err("Build ARM64 programs with easypp build. Installing them into the host environment is unavailable.".into()),
             Actions::CudaArch { .. } | Actions::Deps { .. } => return Err("This command is unavailable for the ARM64 Linux target.".into()),
             _ => {}
         }
@@ -133,7 +135,11 @@ fn run() -> Result<ExitCode, String> {
     if opts.cross.is_none()
         && matches!(
             action,
-            Actions::Build | Actions::Run(_) | Actions::Debug(_) | Actions::Test(_)
+            Actions::Build
+                | Actions::Install
+                | Actions::Run(_)
+                | Actions::Debug(_)
+                | Actions::Test(_)
         )
     {
         conan::ensure_installed(&root, &opts)?;
@@ -146,6 +152,10 @@ fn run() -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Actions::Run(args) => run_bin(&project, &opts, &args, &invoked_from),
+        Actions::Install => {
+            install::run(&project, &opts)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Actions::Debug(args) => debug_bin(&project, &opts, &args, &invoked_from),
         Actions::ExportCmake { force } => {
             export::write(&project, force, opts.shared)?;

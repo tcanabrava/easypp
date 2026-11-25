@@ -198,6 +198,26 @@ Release profile.
   pkg-config folder changes. `--no-cache` ignores the cache, and `easypp clean`
   deletes it.
 
+## Installing a project
+
+Run `easypp install` to build and install the project's programs, library
+artifacts, and runtime data. The system prefix is `/usr/local`, with
+executables in `bin/`, libraries in `lib/`, and XDG data in `share/`.
+Use `--release` for an optimized build or `--linkage shared` to install
+shared libraries.
+
+Lay out `data/` the same way as `share/`. For example, put desktop files
+in `data/applications/`, AppStream metadata in `data/metainfo/`, icons
+in `data/icons/hicolor/`, and application assets in `data/<application>/`.
+Top-level desktop files, AppStream metadata, and KDE-style
+`<size>-apps-<name>.png` icons also go to their standard locations.
+
+If system installation is blocked by permissions, easypp uses `~/easypp`
+and writes an executable `~/easypp/launch.sh`. Run it directly when that
+prefix has one program, or pass a program name and any arguments. The
+launcher sets up the runtime environment and documents how to make the
+installation visible to your shell and desktop session.
+
 ## Shared libraries
 
 Use the same source layout and includes for static and shared builds. On Linux,

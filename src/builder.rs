@@ -1239,7 +1239,7 @@ fn archive_path(opts: &Options, lib: &str) -> PathBuf {
     opts.dir().join("lib").join(format!("lib{lib}.a"))
 }
 
-fn library_path(opts: &Options, lib: &str) -> PathBuf {
+pub(crate) fn library_path(opts: &Options, lib: &str) -> PathBuf {
     if opts.shared {
         opts.dir().join("lib").join(format!("lib{lib}.so"))
     } else {

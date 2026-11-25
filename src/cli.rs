@@ -91,6 +91,11 @@ pub enum Actions {
         after_help = "Example: easypp build --release -j4\n\nIf conanfile.txt exists, missing or stale Conan dependencies are installed first."
     )]
     Build,
+    /// Build and install programs, project libraries, and XDG data.
+    #[command(
+        after_help = "Installs into /usr/local, or into ~/easypp with a launcher if permissions prevent a system installation."
+    )]
+    Install,
     /// Build and run an executable from src/bin.
     #[command(after_help = "Example: easypp run hello -- --greeting Alice")]
     Run(ProgramArgs),
